@@ -31,3 +31,8 @@ pydantic==2.5.3
 # Utilities
 python-dateutil==2.8.2
 pytz==2023.3
+
+# New Data Collectors (100% Coverage)
+yfinance>=0.2.32          # Yahoo Finance (SPX/DXY Correlations)
+scipy>=1.11.4             # Black-Scholes Greeks (Deribit)
+fredapi>=0.5.1            # FRED Macro Data (DXY, 10Y, M2)
