@@ -1,0 +1,830 @@
+================================================================================
+    CRYPTO DATA FACTORY - API KEYS & RATE LIMIT REQUIREMENTS (2025)
+    24x7 Operation Planning Document
+================================================================================
+
+PROJECT GOAL: Collect 60+ columns of crypto data every 1 second (86,400 rows/day)
+DURATION: Continuous 24x7 operation (no downtime)
+INFRASTRUCTURE: VPS + TimescaleDB + IPRoyal Proxies (30 proxies available)
+
+================================================================================
+SECTION 1: API PROVIDERS SUMMARY
+================================================================================
+
+Total API Providers: 10
+├── Real-time Data (WebSocket): 2 providers
+├── REST API (Polling): 8 providers
+└── Public vs Private: Mixed
+
+================================================================================
+SECTION 2: DETAILED RATE LIMIT ANALYSIS BY PROVIDER
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. BINANCE (Market Data - PRIMARY SOURCE)                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Public + Private (Free tier available)
+AUTHENTICATION: Optional for market data, Required for account data
+
+ENDPOINTS WE NEED:
+├── WebSocket Streams (Real-time)
+│   ├── wss://stream.binance.com:9443/ws/btcusdt@depth5
+│   ├── wss://stream.binance.com:9443/ws/btcusdt@aggTrade
+│   └── Rate Limit: NO LIMIT (Push-based, reconnect every 24h)
+│
+├── REST API - Market Data (No Auth Required)
+│   ├── GET /api/v3/ticker/24hr
+│   ├── GET /api/v3/klines
+│   ├── GET /api/v3/depth
+│   ├── GET /api/v3/trades
+│   └── Rate Limit: 1200 requests/minute (Weight-based system)
+│
+└── REST API - Futures (No Auth Required)
+    ├── GET /fapi/v1/fundingRate
+    ├── GET /fapi/v1/openInterest
+    ├── GET /futures/data/topLongShortAccountRatio
+    └── Rate Limit: 2400 requests/minute (Weight-based)
+
+OUR REQUEST PATTERN:
+├── WebSocket: Continuous (1 connection, auto-reconnect)
+├── Funding Rate: Every 60 seconds (1 req/min)
+├── Open Interest: Every 10 seconds (6 req/min)
+├── Long/Short Ratio: Every 60 seconds (1 req/min)
+└── Total REST: ~8 requests/minute
+
+RATE LIMIT DETAILS (2025):
+├── Weight System: Each endpoint has a weight (1-40)
+├── Limit: 1200 weight/minute (raw data), 2400 weight/minute (futures)
+├── IP-based: Limits tied to IP address
+├── Reset: Every 60 seconds (rolling window)
+└── No daily cap: Unlimited requests within per-minute limit
+
+API KEYS NEEDED:
+├── Scenario A (No Auth): 0 keys (use public endpoints via proxies)
+├── Scenario B (With Auth): 1 key (for higher limits if needed)
+└── RECOMMENDED: 1-2 keys + 5 proxy IPs (rotate IPs for safety)
+
+DAILY REQUEST ESTIMATE:
+├── WebSocket: 0 REST requests
+├── REST Polling: 8 req/min × 1440 min = 11,520 requests/day
+├── Safety Buffer: 20,000 requests/day
+└── VERDICT: 1 API key sufficient (public endpoints)
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. DELTA EXCHANGE (Derivatives & Options)                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Private (Free tier available)
+AUTHENTICATION: Required (API Key + Secret)
+
+ENDPOINTS WE NEED:
+├── GET /v2/ticker (Greeks: Delta, Theta, Gamma, Vega)
+├── GET /v2/orders (Open Interest)
+├── GET /v2/products (Contract specs)
+├── WebSocket: v2/ticker, v2/l2orderbook, v2/trades
+└── GET /v2/wallet/balances (Optional: balance check)
+
+RATE LIMIT DETAILS (2025 - FREE TIER):
+├── REST API: 50 requests per MINUTE (per API key)
+├── WebSocket: 10 concurrent connections (per account)
+├── Reset Period: 60 seconds (rolling window)
+├── Daily Cap: NONE (only per-minute limit)
+└── IP Limit: Combined with API key (IP + Key pair)
+
+OUR REQUEST PATTERN:
+├── WebSocket: 2 connections (ticker + orderbook) - PREFERRED
+├── REST Fallback: 6 requests/minute (if WS fails)
+│   ├── Ticker: Every 10 seconds (6 req/min)
+│   └── Open Interest: Every 60 seconds (1 req/min)
+└── Total: 6-7 requests/minute
+
+CALCULATION FOR 24x7:
+├── Current Usage: 7 req/min × 1440 min = 10,080 req/day
+├── Free Tier Limit: 50 req/min (sufficient)
+├── Safety Buffer: Use 2 keys (rotate if one hits limit)
+└── Each key can handle: 50 × 1440 = 72,000 req/day
+
+API KEYS NEEDED:
+├── MINIMUM: 1 key (sufficient for current load)
+├── RECOMMENDED: 2-3 keys (safety + failover)
+└── With Proxies: 2 keys + 3 proxies = 6 effective limits
+
+DAILY REQUEST ESTIMATE:
+├── WebSocket Preferred: ~500 REST requests/day (reconnections only)
+├── Full REST Mode: 10,080 requests/day
+└── VERDICT: 2 API keys recommended
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. CRYPTOPANIC (News Sentiment)                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Freemium (Free tier available)
+AUTHENTICATION: Required (API Token)
+
+ENDPOINTS WE NEED:
+└── GET /api/v1/posts/?auth_token=XXX&currencies=BTC
+
+RATE LIMIT DETAILS (2025 - FREE TIER):
+├── Free Plan: 100 requests per DAY (not per minute!)
+├── Reset Period: 24 hours (at midnight UTC)
+├── Paid Plan: 3000 requests/day ($9/month)
+└── IP + Token: Limit tied to API token
+
+OUR REQUEST PATTERN:
+├── News Check: Every 5 minutes (12 req/hour)
+├── Daily Usage: 12 × 24 = 288 requests/day
+└── Free Tier: Only 100 requests/day ❌ INSUFFICIENT
+
+CALCULATION FOR 24x7:
+├── Required: 288 requests/day
+├── Free Tier: 100 requests/day per key
+├── Keys Needed: 288 ÷ 100 = 3 keys (minimum)
+└── Safety Buffer: 4 keys (in case of failures)
+
+API KEYS NEEDED:
+├── MINIMUM: 3 free accounts
+├── RECOMMENDED: 4 free accounts (rotate every 6 hours)
+└── Alternative: 1 paid account ($9/month = 3000 req/day)
+
+DAILY REQUEST ESTIMATE:
+├── Target Frequency: Every 5 minutes
+├── Total Requests: 288 per day
+└── VERDICT: 3-4 FREE keys OR 1 PAID key
+
+NOTE: Free tier resets daily, NOT hourly!
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. BLOCKCHAIN.INFO (Whale Tracking)                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Public (WebSocket - No Auth Required)
+AUTHENTICATION: None
+
+ENDPOINTS WE NEED:
+└── wss://ws.blockchain.info/inv (Real-time transactions)
+
+RATE LIMIT DETAILS (2025):
+├── WebSocket: NO RATE LIMIT (public stream)
+├── Connection Limit: Unlimited concurrent connections
+├── Reconnection: Auto-reconnect on disconnect
+└── No API Key Required: Completely free
+
+OUR REQUEST PATTERN:
+└── WebSocket: 1 persistent connection (push-based)
+
+API KEYS NEEDED:
+└── 0 keys (no authentication required)
+
+DAILY REQUEST ESTIMATE:
+└── 0 REST requests (WebSocket only)
+
+VERDICT: NO API KEY NEEDED
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. ETHERSCAN (Ethereum On-Chain Data)                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Freemium (Free tier available)
+AUTHENTICATION: Required (API Key)
+
+ENDPOINTS WE NEED:
+├── GET /api?module=account&action=balance
+├── GET /api?module=gastracker&action=gasoracle
+└── Tracking 8 exchange wallets (Binance, Coinbase, Kraken, etc.)
+
+RATE LIMIT DETAILS (2025 - FREE TIER):
+├── Free Plan: 5 requests per SECOND = 300 req/min
+├── Daily Cap: 100,000 requests per day
+├── Reset: Rolling window (per second)
+├── Paid Plan: 10 req/sec ($49/month)
+└── IP + API Key: Both checked
+
+OUR REQUEST PATTERN:
+├── Balance Check: 8 wallets × every 60 seconds = 8 req/min
+├── Gas Price: Every 60 seconds = 1 req/min
+└── Total: 9 requests/minute
+
+CALCULATION FOR 24x7:
+├── Required: 9 req/min × 1440 = 12,960 req/day
+├── Free Tier: 100,000 req/day (MORE than enough)
+└── Per-second check: 9 req/min = 0.15 req/sec (within 5 req/sec)
+
+API KEYS NEEDED:
+├── MINIMUM: 1 free key
+├── RECOMMENDED: 2 keys (failover)
+└── With Proxies: 1 key + 2 proxies (IP rotation)
+
+DAILY REQUEST ESTIMATE:
+├── Total: 12,960 requests/day
+├── Free Limit: 100,000 requests/day
+└── VERDICT: 1 API key sufficient
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 6. ALPHA VANTAGE (News Sentiment Analysis)                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Freemium (Free tier available)
+AUTHENTICATION: Required (API Key)
+
+ENDPOINTS WE NEED:
+└── GET /query?function=NEWS_SENTIMENT&tickers=CRYPTO:BTC
+
+RATE LIMIT DETAILS (2025 - FREE TIER):
+├── Free Plan: 25 requests per DAY (VERY LIMITED!)
+├── Reset Period: 24 hours
+├── Paid Plan: 75 req/day ($25/month), 1200 req/day ($250/month)
+└── No per-minute limit, only daily cap
+
+OUR REQUEST PATTERN:
+├── Sentiment Check: Every 30 minutes (48 req/day)
+└── Free Tier: Only 25 requests/day ❌ INSUFFICIENT
+
+CALCULATION FOR 24x7:
+├── Target: Every 30 minutes = 48 requests/day
+├── Free Tier: 25 requests/day per key
+├── Keys Needed: 48 ÷ 25 = 2 keys (minimum)
+└── Safety Buffer: 3 keys
+
+API KEYS NEEDED:
+├── MINIMUM: 2 free accounts
+├── RECOMMENDED: 3 free accounts (rotate)
+└── Alternative: 1 paid account ($25/month)
+
+DAILY REQUEST ESTIMATE:
+├── Target: 48 requests/day (every 30 min)
+└── VERDICT: 2-3 FREE keys OR 1 PAID key
+
+NOTE: Very restrictive free tier, consider paid plan
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 7. FRED (Federal Reserve Economic Data)                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Free (Government API)
+AUTHENTICATION: Required (API Key)
+
+ENDPOINTS WE NEED:
+├── GET /fred/series/observations?series_id=FEDFUNDS
+└── GET /fred/series/observations?series_id=CPIAUCSL
+
+RATE LIMIT DETAILS (2025 - FREE):
+├── Free Plan: 120 requests per MINUTE
+├── Daily Cap: UNLIMITED
+├── Reset: 60 seconds
+└── Very generous limits
+
+OUR REQUEST PATTERN:
+├── Interest Rate: Every 24 hours (1 req/day)
+├── CPI Data: Every 24 hours (1 req/day)
+└── Total: 2 requests/day
+
+CALCULATION FOR 24x7:
+└── Required: 2 requests/day (WELL within limits)
+
+API KEYS NEEDED:
+└── MINIMUM: 1 free key
+
+DAILY REQUEST ESTIMATE:
+└── 2 requests/day
+
+VERDICT: 1 API key sufficient
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 8. COINGECKO (Backup Price Data)                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Freemium (Free tier available)
+AUTHENTICATION: Optional (Higher limits with API key)
+
+ENDPOINTS WE NEED:
+└── GET /api/v3/simple/price?ids=bitcoin,ethereum
+
+RATE LIMIT DETAILS (2025 - FREE TIER):
+├── Without API Key: 10-30 requests per MINUTE (IP-based)
+├── With Free API Key: 30 requests per MINUTE
+├── Demo Plan ($0): 30 calls/min, 10,000 calls/month
+├── Paid Plan: 500 calls/min ($129/month)
+└── Monthly Cap: 10,000 requests/month (free)
+
+OUR REQUEST PATTERN:
+├── Price Check: Every 60 seconds (backup only)
+└── Total: 1 request/minute = 1440 req/day = 43,200 req/month
+
+CALCULATION FOR 24x7:
+├── Required: 43,200 requests/month
+├── Free Tier: 10,000 requests/month ❌ INSUFFICIENT
+├── Keys Needed: 43,200 ÷ 10,000 = 5 keys
+└── Alternative: Use Binance as primary (CoinGecko as fallback only)
+
+API KEYS NEEDED:
+├── MINIMUM (Fallback Only): 1 key (emergency use)
+├── FULL USAGE: 5 free accounts
+└── RECOMMENDED: Use Binance primary, CoinGecko fallback
+
+DAILY REQUEST ESTIMATE:
+├── As Backup: ~100 requests/day (emergency only)
+└── VERDICT: 1 API key (backup mode)
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 9. YAHOO FINANCE (Macro Market Data)                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Unofficial (No official API in 2025)
+AUTHENTICATION: None
+
+CURRENT STATUS (2025):
+├── Official API: Discontinued
+├── Alternative 1: Use yfinance Python library (web scraping)
+├── Alternative 2: Use Alpha Vantage for DXY/SPX
+└── Rate Limit: Soft limit ~2000 requests/hour (IP-based, unreliable)
+
+OUR REQUEST PATTERN:
+├── DXY (Dollar Index): Every 5 minutes (12 req/hour)
+├── SPX (S&P 500): Every 5 minutes (12 req/hour)
+└── Total: 24 requests/hour = 576 req/day
+
+RECOMMENDATION:
+├── OPTION A: Use yfinance library (unofficial, may break)
+├── OPTION B: Switch to Alpha Vantage (free: 25 req/day)
+└── OPTION C: Use Binance futures correlation data
+
+API KEYS NEEDED:
+└── 0 (using yfinance library) OR switch to Alpha Vantage
+
+DAILY REQUEST ESTIMATE:
+└── 576 requests/day (if using yfinance)
+
+VERDICT: NO API KEY (use yfinance) - HIGH RISK, may fail
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 10. ALTERNATIVE.ME (Fear & Greed Index)                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+API TYPE: Free (No Authentication)
+AUTHENTICATION: None
+
+ENDPOINTS WE NEED:
+└── GET https://api.alternative.me/fng/
+
+RATE LIMIT DETAILS (2025 - FREE):
+├── No Official Limit: Soft limit ~60 requests/hour
+├── Data Updates: Every 8 hours (no need to poll frequently)
+├── No API Key Required
+└── IP-based (soft enforcement)
+
+OUR REQUEST PATTERN:
+├── Fear & Greed: Every 30 minutes (48 req/day)
+└── Recommended: Every 8 hours (3 req/day, matches update frequency)
+
+API KEYS NEEDED:
+└── 0 keys (no authentication)
+
+DAILY REQUEST ESTIMATE:
+└── 3 requests/day (optimal) or 48 requests/day (excessive)
+
+VERDICT: NO API KEY NEEDED
+
+
+================================================================================
+SECTION 3: TOTAL API KEYS REQUIRED SUMMARY
+================================================================================
+
+┌─────────────────┬──────────────┬─────────────┬──────────────┬─────────────┐
+│ API Provider    │ Free Tier    │ Min Keys    │ Recommended  │ Cost/Month  │
+│                 │ Limit        │ Required    │ Keys         │ (if paid)   │
+├─────────────────┼──────────────┼─────────────┼──────────────┼─────────────┤
+│ 1. Binance      │ 1200 req/min │ 0 (public)  │ 1-2          │ $0          │
+│ 2. Delta        │ 50 req/min   │ 1           │ 2-3          │ $0          │
+│ 3. CryptoPanic  │ 100 req/DAY  │ 3           │ 4            │ $0 or $9    │
+│ 4. Blockchain   │ Unlimited WS │ 0           │ 0            │ $0          │
+│ 5. Etherscan    │ 100k/day     │ 1           │ 2            │ $0          │
+│ 6. Alpha Vant.  │ 25 req/DAY   │ 2           │ 3            │ $0 or $25   │
+│ 7. FRED         │ 120 req/min  │ 1           │ 1            │ $0          │
+│ 8. CoinGecko    │ 10k/month    │ 1 (backup)  │ 1            │ $0          │
+│ 9. Yahoo        │ Unofficial   │ 0           │ 0            │ $0          │
+│ 10. Alternative │ No limit     │ 0           │ 0            │ $0          │
+├─────────────────┼──────────────┼─────────────┼──────────────┼─────────────┤
+│ TOTAL           │ -            │ 9 keys      │ 16-17 keys   │ $0-$34/mo   │
+└─────────────────┴──────────────┴─────────────┴──────────────┴─────────────┘
+
+
+================================================================================
+SECTION 4: DETAILED KEY CREATION CHECKLIST
+================================================================================
+
+CREATE THESE ACCOUNTS (FREE TIER):
+
+[ ] BINANCE (Optional - for higher limits)
+    └── Create 1-2 accounts at binance.com
+    └── Generate API Key (Read-Only permissions)
+    └── Save: API Key + Secret
+
+[ ] DELTA EXCHANGE (Required)
+    └── Create 2-3 accounts at delta.exchange
+    └── Generate API Key (Read-Only + Trade if needed)
+    └── Save: API Key + Secret
+    └── Verify: 50 requests/minute limit
+
+[ ] CRYPTOPANIC (Required - Critical Bottleneck)
+    └── Create 4 accounts at cryptopanic.com
+    └── Get Free API Token (100 requests/day each)
+    └── Save: 4 API Tokens
+    └── Rotate: Every 6 hours (4 keys × 100 = 400 req/day)
+
+[ ] ETHERSCAN (Required)
+    └── Create 2 accounts at etherscan.io
+    └── Generate API Key (Free tier: 100k/day)
+    └── Save: 2 API Keys
+
+[ ] ALPHA VANTAGE (Required - Tight Limit)
+    └── Create 3 accounts at alphavantage.co
+    └── Get Free API Key (25 requests/day each)
+    └── Save: 3 API Keys
+    └── Alternative: Buy 1 paid key ($25/month = 75 req/day)
+
+[ ] FRED (Federal Reserve)
+    └── Create 1 account at fred.stlouisfed.org
+    └── Request API Key (free, instant approval)
+    └── Save: 1 API Key
+
+[ ] COINGECKO (Optional - Backup)
+    └── Create 1 account at coingecko.com
+    └── Get Free Demo API Key
+    └── Save: 1 API Key
+    └── Use: Only as backup when Binance fails
+
+[ ] BLOCKCHAIN.INFO (No Account Needed)
+    └── No API key required (public WebSocket)
+
+[ ] YAHOO FINANCE (No Account Needed)
+    └── Use yfinance library (no API key)
+
+[ ] ALTERNATIVE.ME (No Account Needed)
+    └── No API key required (public endpoint)
+
+
+================================================================================
+SECTION 5: PROXY USAGE STRATEGY
+================================================================================
+
+YOU HAVE: 30 IPRoyal Proxies
+FORMAT: IP:PORT:USERNAME:PASSWORD
+
+PROXY ALLOCATION PLAN:
+
+├── Binance (IP-based limits)
+│   ├── Assign: 5 proxies (rotate every request)
+│   └── Purpose: Multiply effective rate limit 5x
+│
+├── Delta Exchange (IP + API Key limits)
+│   ├── Assign: 3 proxies (1 per API key)
+│   └── Purpose: Isolate each key's limit
+│
+├── CryptoPanic (Token-based, but IP helps)
+│   ├── Assign: 4 proxies (1 per API token)
+│   └── Purpose: Prevent IP bans
+│
+├── Etherscan (IP + API Key limits)
+│   ├── Assign: 2 proxies (1 per API key)
+│   └── Purpose: Failover redundancy
+│
+├── Alpha Vantage (API Key primary, IP secondary)
+│   ├── Assign: 3 proxies (1 per API key)
+│   └── Purpose: Avoid soft IP limits
+│
+├── Other APIs (Low volume)
+│   ├── Assign: 5 proxies (shared pool)
+│   └── Purpose: General rotation
+│
+└── Reserve Pool
+    ├── Remaining: 8 proxies
+    └── Purpose: Failover + future expansion
+
+TOTAL PROXIES USED: 22 out of 30
+
+
+================================================================================
+SECTION 6: RATE LIMIT MONITORING & ROTATION LOGIC
+================================================================================
+
+KEY ROTATION STRATEGY:
+
+1. CryptoPanic (Daily Limit - Most Critical)
+   ├── 4 keys × 100 requests/day = 400 requests/day total
+   ├── Target: 288 requests/day (every 5 minutes)
+   ├── Rotation: Switch key every 6 hours
+   ├── Logic: Track daily usage per key, switch at 80 requests
+   └── Reset: All keys reset at midnight UTC
+
+2. Alpha Vantage (Daily Limit - Critical)
+   ├── 3 keys × 25 requests/day = 75 requests/day total
+   ├── Target: 48 requests/day (every 30 minutes)
+   ├── Rotation: Switch key every 8 hours
+   ├── Logic: Track daily usage per key, switch at 20 requests
+   └── Reset: All keys reset at midnight UTC
+
+3. Delta Exchange (Per-Minute Limit)
+   ├── 2-3 keys × 50 requests/min = 100-150 requests/min total
+   ├── Target: 7 requests/min
+   ├── Rotation: Switch key if approaching 40 requests/min
+   ├── Logic: Rolling 60-second window counter
+   └── Reset: Every 60 seconds
+
+4. Binance (Per-Minute Weight)
+   ├── Weight system: Each endpoint = 1-40 weight
+   ├── Limit: 1200 weight/minute
+   ├── Our usage: ~50 weight/minute
+   ├── Rotation: Switch proxy every 100 requests
+   └── Reset: Every 60 seconds
+
+5. Etherscan (Per-Second Limit)
+   ├── 1 key × 5 requests/second = 300 requests/minute
+   ├── Our usage: 9 requests/minute
+   ├── No rotation needed (well within limit)
+   └── Reset: Rolling 1-second window
+
+
+================================================================================
+SECTION 7: FINAL RECOMMENDATIONS
+================================================================================
+
+OPTION A: FULLY FREE SETUP (RECOMMENDED)
+├── Total API Keys: 16 free accounts
+├── Monthly Cost: $0
+├── Reliability: 85% (some APIs restrictive)
+├── Maintenance: High (manage multiple accounts)
+└── BREAKDOWN:
+    ├── 2 Binance keys (optional, can use 0)
+    ├── 3 Delta Exchange keys
+    ├── 4 CryptoPanic keys (rotate daily)
+    ├── 2 Etherscan keys
+    ├── 3 Alpha Vantage keys (rotate daily)
+    ├── 1 FRED key
+    └── 1 CoinGecko key (backup)
+
+OPTION B: HYBRID (FREE + PAID)
+├── Total API Keys: 10 accounts
+├── Monthly Cost: $34 ($9 CryptoPanic + $25 Alpha Vantage)
+├── Reliability: 98% (paid tiers more stable)
+├── Maintenance: Low (fewer keys to manage)
+└── BREAKDOWN:
+    ├── 2 Binance keys (free)
+    ├── 2 Delta Exchange keys (free)
+    ├── 1 CryptoPanic PAID ($9/month, 3000 req/day)
+    ├── 2 Etherscan keys (free)
+    ├── 1 Alpha Vantage PAID ($25/month, 75 req/day)
+    ├── 1 FRED key (free)
+    └── 1 CoinGecko key (free, backup)
+
+OPTION C: MINIMAL SETUP (HIGH RISK)
+├── Total API Keys: 9 accounts
+├── Monthly Cost: $0
+├── Reliability: 70% (tight limits, frequent failures)
+├── Maintenance: Very High (manual intervention needed)
+└── NOT RECOMMENDED for 24x7 operation
+
+
+MY RECOMMENDATION: Start with OPTION A (Fully Free)
+├── Test for 1 week on VPS
+├── Monitor which APIs hit limits most often
+├── Upgrade only the bottleneck APIs to paid
+└── Expected outcome: Upgrade CryptoPanic or Alpha Vantage
+
+
+================================================================================
+SECTION 8: IMPLEMENTATION PRIORITY
+================================================================================
+
+PHASE 1: Core Data (Start Here)
+├── Binance: WebSocket (price, orderbook, trades) - NO KEY NEEDED
+├── Binance: REST (funding, OI, long/short) - 1 KEY
+├── Delta Exchange: REST/WS (Greeks, OI) - 2 KEYS
+└── Blockchain.info: WebSocket (whale alerts) - NO KEY NEEDED
+
+PHASE 2: Sentiment & Context
+├── CryptoPanic: News sentiment - 4 KEYS
+├── Alpha Vantage: News sentiment - 3 KEYS
+├── Alternative.me: Fear & Greed - NO KEY NEEDED
+└── FRED: Macro data - 1 KEY
+
+PHASE 3: On-Chain & Backup
+├── Etherscan: ETH whale tracking - 2 KEYS
+├── CoinGecko: Backup prices - 1 KEY
+└── Yahoo Finance: Macro backup - NO KEY NEEDED
+
+
+================================================================================
+SECTION 9: CONFIG FILE TEMPLATE
+================================================================================
+
+Your config/secrets.json should look like this:
+
+{
+  "db_config": {
+    "host": "localhost",
+    "port": 5432,
+    "user": "postgres",
+    "password": "YOUR_SECURE_PASSWORD",
+    "dbname": "crypto_data"
+  },
+  
+  "binance_keys": [
+    {"api_key": "BINANCE_KEY_1", "api_secret": "BINANCE_SECRET_1", "limit": 1200, "type": "spot"},
+    {"api_key": "BINANCE_KEY_2", "api_secret": "BINANCE_SECRET_2", "limit": 2400, "type": "futures"}
+  ],
+  
+  "delta_keys": [
+    {"api_key": "DELTA_KEY_1", "api_secret": "DELTA_SECRET_1", "limit": 50},
+    {"api_key": "DELTA_KEY_2", "api_secret": "DELTA_SECRET_2", "limit": 50},
+    {"api_key": "DELTA_KEY_3", "api_secret": "DELTA_SECRET_3", "limit": 50}
+  ],
+  
+  "cryptopanic_keys": [
+    {"token": "CRYPTOPANIC_TOKEN_1", "daily_limit": 100, "reset_hour": 0},
+    {"token": "CRYPTOPANIC_TOKEN_2", "daily_limit": 100, "reset_hour": 0},
+    {"token": "CRYPTOPANIC_TOKEN_3", "daily_limit": 100, "reset_hour": 0},
+    {"token": "CRYPTOPANIC_TOKEN_4", "daily_limit": 100, "reset_hour": 0}
+  ],
+  
+  "etherscan_keys": [
+    {"api_key": "ETHERSCAN_KEY_1", "daily_limit": 100000},
+    {"api_key": "ETHERSCAN_KEY_2", "daily_limit": 100000}
+  ],
+  
+  "alphavantage_keys": [
+    {"api_key": "ALPHAVANTAGE_KEY_1", "daily_limit": 25},
+    {"api_key": "ALPHAVANTAGE_KEY_2", "daily_limit": 25},
+    {"api_key": "ALPHAVANTAGE_KEY_3", "daily_limit": 25}
+  ],
+  
+  "fred_keys": [
+    {"api_key": "FRED_API_KEY_1", "limit": 120}
+  ],
+  
+  "coingecko_keys": [
+    {"api_key": "COINGECKO_KEY_1", "monthly_limit": 10000}
+  ],
+  
+  "proxies": [
+    {"host": "92.61.99.7", "port": 12323, "username": "14a049e0fbd06", "password": "d33b6ba760"},
+    {"host": "92.61.99.158", "port": 12323, "username": "14a049e0fbd06", "password": "d33b6ba760"}
+    // ... add all 30 proxies from iproyal-proxies.txt
+  ]
+}
+
+
+================================================================================
+SECTION 10: DAILY RESET TIMES (IMPORTANT!)
+================================================================================
+
+KNOW YOUR RESET SCHEDULES:
+
+├── Per-Second Limits (Rolling Window)
+│   └── Etherscan: Every 1 second
+│
+├── Per-Minute Limits (Rolling Window)
+│   ├── Binance: Every 60 seconds
+│   ├── Delta Exchange: Every 60 seconds
+│   └── FRED: Every 60 seconds
+│
+├── Daily Limits (Fixed Reset Time)
+│   ├── CryptoPanic: Midnight UTC (00:00)
+│   ├── Alpha Vantage: Midnight ET (Eastern Time, check account)
+│   └── CoinGecko: Monthly reset on 1st day of month
+│
+└── No Limits (Use freely)
+    ├── Binance WebSocket
+    ├── Blockchain.info WebSocket
+    └── Alternative.me
+
+
+================================================================================
+SECTION 11: MONITORING & ALERTS
+================================================================================
+
+IMPLEMENT THESE CHECKS IN YOUR CODE:
+
+1. Rate Limit Counter (Per API)
+   ├── Track requests per minute/day
+   ├── Log when reaching 80% of limit
+   └── Auto-rotate to next key
+
+2. API Health Check
+   ├── Ping each API every 5 minutes
+   ├── Alert if response time > 5 seconds
+   └── Failover to backup key/proxy
+
+3. Daily Usage Report
+   ├── Generate report at midnight UTC
+   ├── Show: Requests used / Limit per API
+   └── Email/Telegram alert if any API > 90% usage
+
+4. Proxy Health
+   ├── Test each proxy every hour
+   ├── Remove dead proxies from rotation
+   └── Alert if < 20 proxies active
+
+
+================================================================================
+SECTION 12: COST-BENEFIT ANALYSIS
+================================================================================
+
+SCENARIO A: All Free APIs
+├── Setup Time: 3-4 hours (create 16 accounts)
+├── Monthly Cost: $0
+├── Expected Uptime: 85% (due to tight limits)
+└── Manual Intervention: 2-3 times/week
+
+SCENARIO B: Hybrid (Paid bottlenecks)
+├── Setup Time: 2 hours (create 10 accounts)
+├── Monthly Cost: $34
+├── Expected Uptime: 98%
+└── Manual Intervention: Once/month
+
+SCENARIO C: Full Paid (Future)
+├── Setup Time: 1 hour
+├── Monthly Cost: $400+ (all premium tiers)
+├── Expected Uptime: 99.9%
+└── Manual Intervention: Minimal
+
+RECOMMENDATION FOR YOU:
+└── Start with Scenario A (free) for 1-2 weeks
+└── Identify bottleneck APIs (likely CryptoPanic + Alpha Vantage)
+└── Upgrade only those 2 to paid ($34/month total)
+└── Final cost: $34/month with 98% reliability
+
+
+================================================================================
+FINAL CHECKLIST BEFORE VPS DEPLOYMENT
+================================================================================
+
+[ ] Create all required API accounts (see Section 4)
+[ ] Verify each API key works (test with curl/Postman)
+[ ] Add all API keys to config/secrets.json (DO NOT push to GitHub)
+[ ] Add all 30 proxies to config/secrets.json
+[ ] Test proxy connections (verify auth works)
+[ ] Set up .gitignore (exclude config/secrets.json)
+[ ] Push skeleton code to GitHub
+[ ] Clone repo on VPS
+[ ] Manually copy secrets.json to VPS (via SCP or editor)
+[ ] Start Docker containers (docker-compose up -d)
+[ ] Run Python script (python run_vps_ingestion.py)
+[ ] Monitor logs for 24 hours
+[ ] Check database (should have 86,400 rows after 1 day)
+[ ] Set up systemd service (auto-restart on crash)
+[ ] Configure log rotation (prevent disk fill)
+[ ] Set up monitoring alerts (Telegram/Email)
+
+
+================================================================================
+ADDITIONAL NOTES
+================================================================================
+
+1. GitHub Security:
+   ├── NEVER push config/secrets.json
+   ├── Use .gitignore to exclude it
+   ├── Push only config/secrets.json.template
+   └── Fill real keys manually on VPS
+
+2. VPS Requirements:
+   ├── RAM: 2GB minimum (4GB recommended)
+   ├── CPU: 2 cores minimum
+   ├── Storage: 50GB minimum (database grows ~1GB/month)
+   └── Network: Unlimited bandwidth (or > 100GB/month)
+
+3. Backup Strategy:
+   ├── Database backup: Daily at 00:00 UTC
+   ├── Config backup: Weekly (manually download secrets.json)
+   └── Code backup: Automatic (GitHub)
+
+4. Future Expansion:
+   ├── Add more symbols: ETHUSDT, SOLUSDT (multiply API usage)
+   ├── Add more features: Twitter API, liquidation heatmap
+   └── Scale proxies: Buy more if needed (IPRoyal allows scaling)
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+Questions? Check these before asking:
+1. "Do I really need 16 keys?" → No, start with 9 (minimum), add more if hitting limits
+2. "Can I use 1 email for all accounts?" → No, each API needs unique email
+3. "Will Binance ban me for multiple keys?" → No, as long as you're not abusing (stay under limits)
+4. "Should I use paid plans now?" → No, test free tier first, upgrade only if needed
+5. "How do I rotate proxies?" → Implement round-robin in key_manager.py (I'll code this next)
+
+NEXT STEPS:
+1. Review this document
+2. Start creating API accounts (Section 4)
+3. Let me know when ready, I'll generate the full project skeleton

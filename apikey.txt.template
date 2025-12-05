@@ -1,0 +1,53 @@
+# ============================================================================
+# API KEYS CONFIGURATION FILE - TEMPLATE
+# ============================================================================
+# 
+# INSTRUCTIONS:
+# 1. Copy this file to "apikey.txt" (DO NOT commit apikey.txt to Git!)
+# 2. Replace placeholder values with your actual API keys
+# 3. Format: KEY:SECRET:LIMIT or TOKEN:LIMIT
+#
+# ============================================================================
+
+# DELTA EXCHANGE (50 req/min per key)
+# Format: API_KEY:API_SECRET:LIMIT
+[DELTA_EXCHANGE]
+your_api_key_here:your_api_secret_here:50
+your_api_key_here:your_api_secret_here:50
+
+# CRYPTOPANIC (100 req/MONTH per token)
+[CRYPTOPANIC]
+your_token_here:100
+your_token_here:100
+your_token_here:100
+your_token_here:100
+
+# ETHERSCAN (100,000 req/day per key)
+[ETHERSCAN]
+your_api_key_here:100000
+your_api_key_here:100000
+your_api_key_here:100000
+
+# ALPHA VANTAGE (25 req/day per key)
+[ALPHAVANTAGE]
+your_api_key_here:25
+your_api_key_here:25
+# ... add up to 30 keys
+
+# FRED (120 req/min per key)
+[FRED]
+your_api_key_here:120
+your_api_key_here:120
+
+# COINGECKO (10,000 req/month per key)
+[COINGECKO]
+your_api_key_here:10000
+your_api_key_here:10000
+# ... add more keys
+
+# ============================================================================
+# NOTES:
+# - apikey.txt is gitignored for security
+# - Never share your actual API keys
+# - Check rate limits on provider websites
+# ============================================================================

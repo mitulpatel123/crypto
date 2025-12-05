@@ -1,0 +1,347 @@
+PART 2: LOCAL PROJECT SETUP (On Your Computer)
+Create a new folder on your laptop called Crypto_Data_Factory. Create the following files inside it.
+
+File 1: docker-compose.yml
+(This sets up the TimescaleDB database).
+
+YAML
+
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: crypto_db
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: "secure_password_123" # CHANGE THIS
+      POSTGRES_USER: "postgres"
+      POSTGRES_DB: "crypto_data"
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+volumes:
+  db_data:
+File 2: requirements.txt
+(Python dependencies).
+
+Plaintext
+
+psycopg2-binary
+requests
+websocket-client
+pandas
+schedule
+colorlog
+File 3: config/secrets.json
+(API Keys - DO NOT PUSH REAL KEYS TO GITHUB. Use this template, then edit on VPS).
+
+JSON
+
+{
+  "db_config": {
+    "host": "localhost",
+    "port": 5432,
+    "user": "postgres",
+    "password": "secure_password_123",
+    "dbname": "crypto_data"
+  },
+  "binance_keys": [
+    {"api_key": "KEY1", "api_secret": "SEC1", "limit": 1200},
+    {"api_key": "KEY2", "api_secret": "SEC2", "limit": 1200}
+  ],
+  "delta_keys": [
+    {"api_key": "KEY1", "api_secret": "SEC1", "limit": 50}
+  ],
+  "proxies": []
+}
+File 4: infrastructure/timescale_db.py
+(The 60-Column Database Engine).
+
+Python
+
+import psycopg2
+from psycopg2 import pool
+from psycopg2.extras import execute_values
+import logging
+import json
+
+class TimescaleDB:
+    def __init__(self, secrets_path="config/secrets.json"):
+        with open(secrets_path) as f:
+            self.config = json.load(f)["db_config"]
+        
+        # Connection Pool (Thread Safe)
+        self.pool = psycopg2.pool.SimpleConnectionPool(
+            1, 20,
+            host=self.config["host"],
+            port=self.config["port"],
+            user=self.config["user"],
+            password=self.config["password"],
+            dbname=self.config["dbname"]
+        )
+        self.init_db()
+
+    def get_conn(self):
+        return self.pool.getconn()
+
+    def put_conn(self, conn):
+        self.pool.putconn(conn)
+
+    def init_db(self):
+        conn = self.get_conn()
+        try:
+            cur = conn.cursor()
+            # Enable TimescaleDB Extension
+            cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
+            
+            # Create the 60-Column Master Table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS feature_store (
+                    timestamp TIMESTAMPTZ NOT NULL,
+                    symbol TEXT NOT NULL,
+                    
+                    -- GROUP A: Price & Volume
+                    open DOUBLE PRECISION, high DOUBLE PRECISION, low DOUBLE PRECISION, close DOUBLE PRECISION,
+                    volume DOUBLE PRECISION, vwap DOUBLE PRECISION, trade_count INT, volatility_hv DOUBLE PRECISION,
+                    
+                    -- GROUP B: Order Book
+                    bid_ask_spread DOUBLE PRECISION, ob_imbalance_5 DOUBLE PRECISION,
+                    ob_wall_bid DOUBLE PRECISION, ob_wall_ask DOUBLE PRECISION,
+                    flow_delta_1m DOUBLE PRECISION, bid_qty_1 DOUBLE PRECISION, ask_qty_1 DOUBLE PRECISION,
+                    
+                    -- GROUP C: Derivatives
+                    funding_rate DOUBLE PRECISION, open_interest DOUBLE PRECISION,
+                    long_short_ratio DOUBLE PRECISION, implied_volatility DOUBLE PRECISION,
+                    iv_rank DOUBLE PRECISION, delta_exposure DOUBLE PRECISION, put_call_ratio DOUBLE PRECISION,
+                    
+                    -- GROUP D: Context
+                    whale_inflow DOUBLE PRECISION, news_sentiment DOUBLE PRECISION, fear_greed_index DOUBLE PRECISION,
+                    
+                    PRIMARY KEY (timestamp, symbol)
+                );
+            """)
+            
+            # Convert to Hypertable (The Magic Command)
+            cur.execute("SELECT create_hypertable('feature_store', 'timestamp', if_not_exists => TRUE);")
+            conn.commit()
+            print("✅ Database & Hypertable Initialized.")
+        except Exception as e:
+            print(f"❌ DB Init Failed: {e}")
+            conn.rollback()
+        finally:
+            self.put_conn(conn)
+
+    def insert_batch(self, rows):
+        """
+        Inserts a list of dictionaries efficiently.
+        rows = [{'timestamp': '...', 'symbol': 'BTCUSDT', 'close': 95000...}, ...]
+        """
+        if not rows: return
+        
+        conn = self.get_conn()
+        try:
+            cur = conn.cursor()
+            
+            # Extract columns dynamically from the first row
+            columns = rows[0].keys()
+            query = f"INSERT INTO feature_store ({','.join(columns)}) VALUES %s"
+            values = [[row[col] for col in columns] for row in rows]
+            
+            execute_values(cur, query, values)
+            conn.commit()
+        except Exception as e:
+            print(f"❌ Batch Insert Failed: {e}")
+            conn.rollback()
+        finally:
+            self.put_conn(conn)
+File 5: infrastructure/key_manager.py
+(Smart Key Rotation).
+
+Python
+
+import json
+import time
+
+class KeyManager:
+    def __init__(self, secrets_path="config/secrets.json"):
+        with open(secrets_path) as f:
+            self.data = json.load(f)
+        
+        self.usage = {
+            "binance": {"index": 0, "count": 0, "reset_time": time.time()},
+            "delta": {"index": 0, "count": 0, "reset_time": time.time()}
+        }
+
+    def get_key(self, service):
+        """Returns {'api_key': '...', 'api_secret': '...'}"""
+        idx = self.usage[service]["index"]
+        keys = self.data[f"{service}_keys"]
+        return keys[idx]
+
+    def increment(self, service):
+        """Call this after every API request"""
+        meta = self.usage[service]
+        keys = self.data[f"{service}_keys"]
+        limit = keys[meta["index"]]["limit"]
+        
+        # Reset count every 60 seconds (simple rate limit logic)
+        if time.time() - meta["reset_time"] > 60:
+            meta["count"] = 0
+            meta["reset_time"] = time.time()
+            
+        meta["count"] += 1
+        
+        # Rotate if 80% of limit hit
+        if meta["count"] > (limit * 0.8):
+            print(f"🔄 Rotating {service} Key! (Hit {meta['count']}/{limit})")
+            meta["index"] = (meta["index"] + 1) % len(keys)
+            meta["count"] = 0
+File 6: data_layer/collectors.py
+(The Data Fetchers).
+
+Python
+
+import requests
+import time
+import threading
+import json
+import websocket # pip install websocket-client
+from datetime import datetime
+
+class DataCollector:
+    def __init__(self, key_manager):
+        self.km = key_manager
+        self.latest_data = {
+            "symbol": "BTCUSDT",
+            "timestamp": None,
+            # Fill defaults to avoid NoneType errors
+            "close": 0, "volume": 0, "ob_imbalance_5": 0,
+            "funding_rate": 0, "open_interest": 0, "news_sentiment": 0
+        }
+        self.lock = threading.Lock()
+
+    def update(self, key, value):
+        with self.lock:
+            self.latest_data[key] = value
+            self.latest_data["timestamp"] = datetime.now()
+
+    def get_snapshot(self):
+        with self.lock:
+            return self.latest_data.copy()
+
+class BinanceWS(DataCollector):
+    def run(self):
+        def on_message(ws, message):
+            data = json.loads(message)
+            # Handle Depth
+            if 'bids' in data: 
+                bids = [float(x[1]) for x in data['bids'][:5]]
+                asks = [float(x[1]) for x in data['asks'][:5]]
+                imbalance = (sum(bids) - sum(asks)) / (sum(bids) + sum(asks) + 1e-9)
+                self.update("ob_imbalance_5", imbalance)
+                self.update("bid_ask_spread", float(data['asks'][0][0]) - float(data['bids'][0][0]))
+            
+            # Handle Ticker/Trade
+            if 'p' in data: # AggTrade
+                self.update("close", float(data['p']))
+                
+        # Connect to Binance stream
+        url = "wss://stream.binance.com:9443/ws/btcusdt@depth5@100ms/btcusdt@aggTrade"
+        ws = websocket.WebSocketApp(url, on_message=on_message)
+        ws.run_forever()
+
+class DeltaPoller(DataCollector):
+    def run(self):
+        while True:
+            try:
+                # Use Key Manager
+                key = self.km.get_key("delta")
+                # Dummy Call (Replace with real Delta URL)
+                # resp = requests.get("https://api.delta.exchange/v2/ticker", headers=...)
+                
+                # Simulating Data for Phase 1 Setup
+                self.update("open_interest", 5000000) 
+                self.update("funding_rate", 0.001)
+                self.km.increment("delta")
+                time.sleep(10) # Poll every 10s
+            except Exception as e:
+                print(f"Delta Error: {e}")
+                time.sleep(5)
+
+class ContextPoller(DataCollector):
+    def run(self):
+        while True:
+            # Poll News/Whales every 5 mins
+            self.update("news_sentiment", 0.5) 
+            self.update("whale_inflow", 100)
+            time.sleep(300)
+File 7: run_vps_ingestion.py
+(The Main Engine).
+
+Python
+
+import time
+import threading
+from infrastructure.timescale_db import TimescaleDB
+from infrastructure.key_manager import KeyManager
+from data_layer.collectors import BinanceWS, DeltaPoller, ContextPoller
+
+def main():
+    print("🚀 STARTING VPS DATA FACTORY (PHASE 1)...")
+    
+    # 1. Initialize Infrastructure
+    db = TimescaleDB()
+    km = KeyManager()
+    
+    # 2. Start Collectors (Threads)
+    binance = BinanceWS(km)
+    delta = DeltaPoller(km)
+    context = ContextPoller(km)
+    
+    t1 = threading.Thread(target=binance.run, daemon=True)
+    t2 = threading.Thread(target=delta.run, daemon=True)
+    t3 = threading.Thread(target=context.run, daemon=True)
+    
+    t1.start(); t2.start(); t3.start()
+    print("✅ Collectors Running...")
+
+    # 3. Main Loop: Write to DB every 1 second
+    try:
+        while True:
+            # Aggregate Data
+            row = {}
+            row.update(binance.get_snapshot())
+            row.update(delta.get_snapshot())
+            row.update(context.get_snapshot())
+            
+            # Ensure timestamp exists
+            if row["timestamp"]:
+                # Insert into TimescaleDB
+                db.insert_batch([row])
+                print(f"[DATA] Saved Row | Price: {row.get('close')} | Imbalance: {row.get('ob_imbalance_5'):.4f}")
+            
+            time.sleep(1) # 1Hz Frequency
+            
+    except KeyboardInterrupt:
+        print("🛑 Stopping Factory...")
+
+if __name__ == "__main__":
+    main()
+🟡 PART 3: GITHUB & DEPLOYMENT
+1. On Your Local Machine (Push to GitHub):
+
+Bash
+
+# Initialize Git
+git init
+git add .
+git commit -m "Initial Data Factory Setup"
+
+# Create a repo on GitHub called 'Crypto_Data_Factory'
+# Link it:
+git remote add origin https://github.com/<YOUR_USER>/Crypto_Data_Factory.git
+git branch -M main
+git push -u origin main

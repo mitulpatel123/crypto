@@ -1,0 +1,258 @@
+#,API Provider,Specific Endpoint / Channel,Data Points Fetched (Raw)
+1,Binance (Spot & Futures),wss://stream.binance.com:9443/ws/btcusdt@depth5,Order Book: Top 5 Bids/Asks (Price & Qty)
+,,wss://stream.binance.com:9443/ws/btcusdt@aggTrade,"Trades: Price, Qty, Maker/Taker side"
+,,GET /fapi/v1/fundingRate,Funding: Current Funding Rate
+2,Delta Exchange,GET /v2/ticker,"Greeks: Delta, Theta, Gamma, Vega"
+,,GET /v2/orders,Open Interest: Total OI for the contract
+3,Blockchain.info,wss://ws.blockchain.info/inv,"Whales: TX Hash, Value (BTC), Sender, Receiver"
+4,CryptoPanic,GET /api/v1/posts,"News: Title, Domain, Date, Currency"
+
+
+
+2. The "60-Column" Master Schema (The Feature Store)
+You do not store "Raw JSON." You store Features. Create a database table called feature_store_1m (1-minute resolution) with exactly these columns.
+
+Group A: Price & Volume (10 Cols)
+Basics available in both history and real-time.
+
+open_price
+
+high_price
+
+low_price
+
+close_price
+
+volume_total (Total USDT volume)
+
+volume_buy (USDT bought)
+
+volume_sell (USDT sold)
+
+trade_count (Number of transactions)
+
+vwap (Volume Weighted Avg Price)
+
+volatility_hv (Historical Volatility of last 60 mins)
+
+Group B: Order Book & Flow (15 Cols)
+The "Alpha" layer. Hard to get historically for free. 11. bid_ask_spread (Ask Price - Bid Price) 12. ob_imbalance_5 (Top 5 Bids Qty - Top 5 Asks Qty) 13. ob_wall_bid (Price of largest bid wall in top 20) 14. ob_wall_ask (Price of largest ask wall in top 20) 15. flow_delta_1m (Net Buying Volume - Net Selling Volume) 16. flow_delta_5m (Rolling 5-min Delta) 17. large_trade_count (Trades > $100k count) 18-25. bid_qty_1 ... ask_qty_5 (Raw depths)
+
+Group C: Derivatives & Greeks (15 Cols)
+Smart Money indicators. 26. funding_rate 27. funding_predicted (Next funding rate estimate) 28. open_interest_total 29. oi_change_1h 30. long_short_ratio (Binance Top Trader Ratio) 31. implied_volatility (ATM Option IV) 32. iv_rank (Current IV vs 30-day range) 33. delta_exposure (Net Gamma of Market Makers) 34. put_call_ratio_vol (Put Vol / Call Vol) 35. put_call_ratio_oi (Put OI / Call OI) 36-40. gamma_strike_1 ... (Gamma at key levels)
+
+Group D: Sentiment & External (10 Cols)
+Contextual data. 41. whale_inflow_exchange (BTC moving to exchanges) 42. whale_outflow_exchange (BTC leaving exchanges) 43. news_sentiment_score (-1 to +1 score from CryptoPanic) 44. social_hype_index (Fear & Greed or Volume) 45. correlation_spx (Correlation with S&P 500) 46. correlation_dxy (Correlation with Dollar Index) 47-50. time_hour, time_day, is_weekend, session_asian/us
+
+
+
+
+https://data.binance.vision/
+
+
+
+
+Data Packet Name,Data Points Inside (Variables),Count
+Whale Alert,"Transaction Hash, Amount (BTC/ETH), Amount (USD), Sender Address, Receiver Address, Transaction Type (Transfer/Mint), Time",7
+News Feed,"Title, Source Domain, Published Date, URL, Currencies Involved",5
+
+Data Packet Name,Data Points Inside (Variables),Count
+Open Interest,"Symbol, Open Interest Amount, Open Interest Value (USD), Timestamp",4
+Options Chain,"Strike Price, Contract Type (Call/Put), Expiry Date, Best Bid, Best Ask, Implied Volatility (Mark), Delta, Theta, Gamma, Vega",10
+Liquidations,"Symbol, Side (Long/Short), Price, Quantity, Timestamp",5
+
+
+Data Packet Name,Data Points Inside (Variables),Count
+Ticker Snapshot,"Symbol, Price Change, Price Change %, Weighted Avg Price, Prev Close Price, Last Price, Last Qty, Bid Price, Bid Qty, Ask Price, Ask Qty, Open Price, High Price, Low Price, Volume, Quote Volume, Open Time, Close Time, First ID, Last ID, Trade Count",21
+Order Book (L2),"Bids (List of [Price, Qty]), Asks (List of [Price, Qty]). If Depth=5, you get 5 bids + 5 asks.",10
+Trade Flow,"Trade ID, Price, Quantity, Quote Quantity, Time, Is Buyer Maker, Is Best Match",7
+Funding Rate,"Symbol, Mark Price, Index Price, Estimated Settle Price, Funding Rate, Next Funding Time",6
+
+
+. Implied Volatility (IV) Rank
+Agent Affected: Agent_IV_Rank
+
+Missing Data: You fetch the Options Chain (list of contracts), but you do not calculate or fetch the historical IV rank.
+
+Why it matters: You cannot know if options are "expensive" or "cheap" without this.
+
+Fix: Need a store of 30-day IV history to calculate "Rank" (Current IV vs 30-day High/Low).
+
+2. Net Gamma Exposure (GEX)
+Agent Affected: Agent_Greeks_Monitor / Agent_Options_Chain
+
+Missing Data: You are fetching generic Greeks from the ticker. You need the Open Interest per Strike combined with the Gamma per Strike to calculate the "Gamma Flip" level (where market makers stop suppressing volatility).
+
+Fix: Logic to iterate through the Options Chain, multiply OI * Gamma for every strike, and sum them up.
+
+3. Put/Call Ratio (Volume & OI)
+Agent Affected: Agent_Put_Call_Ratio
+
+Missing Data: You have the options chain, but you aren't summing up the Total Put Volume vs. Total Call Volume.
+
+Fix: A loop in data_ingestion.py that aggregates volume from the fetched options chain: Total_Put_Vol / Total_Call_Vol.
+
+4. True Social Volume (Reddit/Twitter)
+Agent Affected: Agent_Social_Hype
+
+Missing Data: Currently, this agent relies on the "Fear & Greed Index" (which is a lagging composite). It does not have raw social volume (mentions per hour).
+
+Fix: Real Twitter/X API access (expensive) or a proxy service like LunarCrush (requires API key). "Fear & Greed" is a weak substitute for "Hype".
+
+5. Liquidation Map (Heatmap)
+Agent Affected: Agent_Liquidations
+
+Missing Data: You are listening to real-time liquidations (websocket), which is good. But you lack the predictive "Liquidation Heatmap" (where leverage will be liquidated).
+
+Fix: This is hard to get for free. Most institutional bots pay for Kingfisher or Coinglass API. Your current setup reacts to liquidations after they happen, rather than targeting the levels before.
+
+
+
+
+Binance (Market Data)
+Used by your Technical, OrderBook, and Funding agents.
+
+Endpoints Used:
+
+/api/v3/ticker/24hr (Spot)
+
+/api/v3/klines (History)
+
+/api/v3/depth (Order Book)
+
+/api/v3/trades (Recent Trades)
+
+/fapi/v1/fundingRate (Futures)
+
+/fapi/v1/openInterest (Futures)
+
+/futures/data/topLongShortAccountRatio (Sentiment)
+
+Data Points Collected:
+
+Current Price
+
+24h Volume
+
+OHLCV (Open, High, Low, Close, Volume) for candlesticks
+
+Bid/Ask Depth (Liquidity walls)
+
+Recent Trade Price & Size (Tape reading)
+
+Funding Rate (Periodic payment between longs/shorts)
+
+Total Open Interest (Total active contracts)
+
+Long/Short Ratio (Trader sentiment)
+
+2. Delta Exchange (Execution & Derivatives)
+Used by Execution, Liquidation, and Option agents.
+
+Endpoints Used:
+
+REST: /v2/wallet/balances, /v2/orders, /v2/products, /v2/tickers
+
+WebSocket: v2/ticker, v2/l2orderbook, v2/trades
+
+Data Points Collected:
+
+Real Wallet Balance (USDT)
+
+Product Specs: Contract Value, Contract Type (Inverse/Linear)
+
+Real-time Ticker: Mark Price, Index Price
+
+L2 Order Book: Best Bid/Ask snapshots
+
+Live Trades: Price, Size, Time
+
+Options Chain: List of available option contracts (Calls/Puts)
+
+Greeks (Summary): Delta, Theta, Gamma (derived from ticker stats)
+
+3. CryptoPanic (News)
+Used by Agent_News_Sentiment.
+
+Endpoint: RSS Feed (https://cryptopanic.com/news/rss/)
+
+Data Points Collected:
+
+News Headlines (Title)
+
+Publication Date
+
+Source URL
+
+4. Blockchain.info (Whale Alert)
+Used by Agent_On_Chain_Flow (renamed from Whale Alert).
+
+Endpoint: WebSocket (wss://ws.blockchain.info/inv)
+
+Data Points Collected:
+
+Transaction Hash
+
+Transaction Size (BTC) (Outputs > 10 BTC)
+
+Input/Output Counts (To determine if it's an exchange deposit or cold storage move)
+
+5. Etherscan (Ethereum Metrics)
+Used by Agent_Exchange_Inflow and Gas agents.
+
+Endpoints: /v2/api (Modules: account, gastracker)
+
+Data Points Collected:
+
+Exchange Inflow: ETH Balance of 8 specific exchange wallets (Binance, Coinbase, Kraken, etc.)
+
+Gas Price: Proposed Gas Price (Gwei)
+
+6. Alpha Vantage (Sentiment)
+Used by Agent_News_Sentiment.
+
+Endpoint: NEWS_SENTIMENT
+
+Data Points Collected:
+
+Sentiment Score (Bullish/Bearish label) for "CRYPTO:BTC"
+
+7. FRED (Macro Economics)
+Used by Agent_Macro_Econ.
+
+Endpoints: /fred/series/observations
+
+Data Points Collected:
+
+FEDFUNDS: Federal Funds Interest Rate
+
+CPIAUCSL: Consumer Price Index (Inflation)
+
+8. CoinGecko (Broad Market)
+Used as a backup price source.
+
+Endpoint: /simple/price
+
+Data Points Collected:
+
+Global Average Price (Bitcoin, Ethereum, Solana)
+
+9. Yahoo Finance (Legacy Macro)
+Used as a backup for traditional markets.
+
+Endpoint: /v7/finance/quote
+
+Data Points Collected:
+
+DXY: US Dollar Index Price
+
+SPX: S&P 500 Index Price
+
+10. Alternative.me (Sentiment)
+Used by Agent_Social_Hype.
+
+Endpoint: /fng/
+
+Data Points Collected:
+
+Fear & Greed Index (0-100 Score)
