@@ -56,8 +56,13 @@ class TimescaleDB:
         try:
             cur = conn.cursor()
             
-            # Enable TimescaleDB Extension
-            cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;")
+            # Enable TimescaleDB Extension (skip if not available for local testing)
+            try:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;")
+                print("✅ TimescaleDB extension enabled")
+            except Exception as e:
+                print(f"⚠️  TimescaleDB not available, using regular PostgreSQL: {e}")
+                conn.rollback()  # Reset transaction state
             
             # Create the 60-Column Master Table
             cur.execute("""
@@ -126,13 +131,19 @@ class TimescaleDB:
                     PRIMARY KEY (timestamp, symbol)
                 );
             """)
+            conn.commit()  # Commit table creation before attempting hypertable conversion
             
-            # Convert to Hypertable (The Magic Command)
-            cur.execute("""
-                SELECT create_hypertable('feature_store', 'timestamp', 
-                                        if_not_exists => TRUE,
-                                        chunk_time_interval => INTERVAL '1 day');
-            """)
+            # Convert to Hypertable (The Magic Command) - skip if TimescaleDB not available
+            try:
+                cur.execute("""
+                    SELECT create_hypertable('feature_store', 'timestamp', 
+                                            if_not_exists => TRUE,
+                                            chunk_time_interval => INTERVAL '1 day');
+                """)
+                print("✅ Hypertable created")
+            except Exception as e:
+                print(f"⚠️  Running without hypertable (regular table): {e}")
+                conn.rollback()  # Reset transaction state
             
             # Create indexes for faster queries
             cur.execute("""
