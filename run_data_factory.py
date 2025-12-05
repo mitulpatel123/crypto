@@ -8,6 +8,7 @@ import threading
 import signal
 import sys
 from datetime import datetime
+import numpy as np  # For volatility calculation
 
 # Import our modules
 from config.api_key_parser import APIKeyParser
@@ -21,6 +22,11 @@ from data_layer.collectors_other import (
     EtherscanCollector,
     AlternativeMeCollector
 )
+from data_layer.collectors_deribit import DeribitCollector  # NEW: Deribit for Greeks
+from data_layer.collectors_yfinance import YahooFinanceCollector  # NEW: Yahoo for correlations
+from data_layer.collectors_coinglass import CoinGlassCollector  # NEW: CoinGlass for OI changes
+from data_layer.collectors_coinalyze import CoinalyzeCollector  # NEW: Coinalyze for liquidations + PCR
+from data_layer.collectors_fred import FREDCollector  # NEW: FRED for macro data
 from web_ui.status_server import run_server, update_status
 
 
@@ -72,6 +78,13 @@ def main():
     etherscan = EtherscanCollector(key_manager)
     alternative_me = AlternativeMeCollector()
     
+    # NEW COLLECTORS for 100% data coverage
+    deribit = DeribitCollector()  # For Greeks (IV, Delta, Theta, Vega) + Black-Scholes + PCR
+    yfinance_collector = YahooFinanceCollector()  # For SPX and DXY correlations
+    coinglass = CoinGlassCollector()  # For OI changes only (4h, 24h)
+    coinalyze = CoinalyzeCollector()  # For liquidations (3 keys = 300 calls/day)
+    fred = FREDCollector(key_manager)  # For macro data (DXY, 10Y, M2)
+    
     # Collector status tracking
     collectors_status = {
         "Binance WS": "starting",
@@ -93,13 +106,20 @@ def main():
     etherscan.start()
     alternative_me.start()
     
+    # Start NEW collectors for 100% data coverage
+    deribit.start()
+    yfinance_collector.start()
+    coinglass.start()  # CoinGlass OI changes (FIXED endpoints)
+    coinalyze.start()  # Coinalyze liquidations (3 API keys)
+    fred.start()  # FRED macro data
+    
     time.sleep(3)  # Wait for connections
     
     # Step 6: Start Web UI in separate thread
     print("\n🌐 Step 6: Starting Web UI...")
     ui_thread = threading.Thread(
         target=run_server,
-        kwargs={"host": "0.0.0.0", "port": 5000},
+        kwargs={"host": "0.0.0.0", "port": 8080},
         daemon=True
     )
     ui_thread.start()
@@ -108,7 +128,7 @@ def main():
     print("\n" + "=" * 80)
     print("✅ ALL SYSTEMS ONLINE - DATA COLLECTION STARTED")
     print("=" * 80)
-    print(f"📊 Web UI: http://localhost:5000")
+    print(f"📊 Web UI: http://localhost:8080")
     print(f"💾 Database: feature_store table")
     print(f"🔄 Collection Frequency: Every 1 second")
     print(f"⏹️  Press Ctrl+C to stop gracefully")
@@ -117,23 +137,31 @@ def main():
     # Main data collection loop
     iteration = 0
     
+    # Storage for local calculations
+    price_history = []  # For volatility calculation
+    last_known = {  # For forward fill of slow-updating data
+        "funding_rate": 0.0,
+        "funding_predicted": 0.0,
+        "open_interest": 0.0,
+        "long_short_ratio": 0.0
+    }
+    
     while not shutdown_event.is_set():
         try:
             iteration += 1
             
             # Aggregate data from all collectors (INSTANT - just reading cached data)
+            now = datetime.now()
             row = {
-                "timestamp": datetime.now(),
-                "symbol": "BTCUSDT"
+                "timestamp": now,
+                "symbol": "BTCUSDT",
+                # Add time-based features FIRST (before get_snapshot overwrites)
+                "time_hour": now.hour,
+                "time_day": now.weekday(),  # 0=Monday, 6=Sunday
+                "is_weekend": now.weekday() >= 5  # Saturday=5, Sunday=6
             }
             
-            # Add time-based features
-            now = datetime.now()
-            row["time_hour"] = now.hour
-            row["time_day"] = now.weekday()  # 0=Monday, 6=Sunday
-            row["is_weekend"] = now.weekday() >= 5  # Saturday=5, Sunday=6
-            
-            # Get real-time data (non-blocking snapshots)
+            # Get real-time data (non-blocking snapshots) - these should NOT overwrite time features
             row.update(binance_ws.get_snapshot())
             row.update(delta.get_snapshot())
             row.update(cryptopanic.get_snapshot())
@@ -141,12 +169,58 @@ def main():
             row.update(etherscan.get_snapshot())
             row.update(alternative_me.get_snapshot())
             
+            # Get NEW data sources (Deribit, Yahoo, CoinGlass OI, Coinalyze Liq, FRED)
+            row.update(deribit.get_snapshot())  # Enhanced: Greeks + Black-Scholes + PCR
+            row.update(yfinance_collector.get_snapshot())  # SPX/DXY correlations
+            row.update(coinglass.get_snapshot())  # CoinGlass: OI 1h/4h/24h changes (FIXED)
+            row.update(coinalyze.get_snapshot())  # Coinalyze: Liquidations (FREE 300 calls/day)
+            row.update(fred.get_snapshot())  # FRED: DXY, 10Y, M2
+            
             # Get Binance REST data (every 60 seconds)
             if iteration % 60 == 0:
                 binance_rest.fetch_funding_rate()
                 binance_rest.fetch_open_interest()
                 binance_rest.fetch_long_short_ratio()
                 row.update(binance_rest.get_snapshot())
+            
+            # === LOCAL CALCULATIONS FOR 100% DATA COVERAGE ===
+            
+            # 1. Calculate Historical Volatility (HV) from recent prices
+            price = row.get('close', 0)
+            if price > 0:
+                price_history.append(price)
+                if len(price_history) > 60:  # Keep last 60 seconds
+                    price_history.pop(0)
+                
+                if len(price_history) >= 10:  # Need at least 10 points
+                    # Calculate returns
+                    returns = np.diff(price_history) / np.array(price_history[:-1])
+                    # Annualized volatility (assuming 1-second intervals)
+                    row['volatility_hv'] = float(np.std(returns) * np.sqrt(365 * 24 * 60 * 60))
+            
+            # 2. Forward Fill slow-updating data (so it's never None/NaN)
+            # Update last_known values when Binance REST provides fresh data
+            if row.get('funding_rate') is not None and row.get('funding_rate') != 0:
+                last_known['funding_rate'] = row['funding_rate']
+            if row.get('funding_predicted') is not None and row.get('funding_predicted') != 0:
+                last_known['funding_predicted'] = row['funding_predicted']
+            if row.get('open_interest') is not None and row.get('open_interest') != 0:
+                last_known['open_interest'] = row['open_interest']
+            if row.get('long_short_ratio') is not None and row.get('long_short_ratio') != 0:
+                last_known['long_short_ratio'] = row['long_short_ratio']
+            
+            # Fill current row with last known values (prevents NaN gaps)
+            row['funding_rate'] = row.get('funding_rate') or last_known['funding_rate']
+            row['funding_predicted'] = row.get('funding_predicted') or last_known['funding_predicted']
+            row['open_interest'] = row.get('open_interest') or last_known['open_interest']
+            row['long_short_ratio'] = row.get('long_short_ratio') or last_known['long_short_ratio']
+            
+            # 3. Calculate order book walls (if detected)
+            # Logic is already in Binance collector, but ensure it's not None
+            if row.get('ob_wall_bid') is None:
+                row['ob_wall_bid'] = 0.0
+            if row.get('ob_wall_ask') is None:
+                row['ob_wall_ask'] = 0.0
             
             # Insert into database
             if row.get("timestamp"):

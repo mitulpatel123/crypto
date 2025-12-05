@@ -61,18 +61,21 @@ class DeltaExchangeCollector(ThreadedCollector):
     def fetch_ticker(self, symbol: str = "BTCUSD"):
         """Fetch ticker data with Greeks and options metrics"""
         if not self.key_manager.increment("delta"):
+            print("⚠️  Delta Exchange: Rate limit reached, skipping...")
             return
         
         try:
             key = self.key_manager.get_key("delta")
             if not key:
+                print("❌ Delta Exchange: No API key available")
                 return
             
             # Fetch main ticker with Greeks
             url = f"{self.base_url}/v2/tickers/{symbol}"
             
-            # Disable proxy for Delta Exchange (direct connection)
-            response = requests.get(url, timeout=5)
+            # CRITICAL: Disable proxy for Delta Exchange (direct connection)
+            response = requests.get(url, timeout=10, proxies={"http": None, "https": None})
+            
             if response.status_code == 200:
                 json_resp = response.json()
                 data = json_resp.get('result') or {}
@@ -83,12 +86,18 @@ class DeltaExchangeCollector(ThreadedCollector):
                     self.latest_data["delta_exposure"] = greeks.get('delta')
                     self.latest_data["theta"] = greeks.get('theta')
                     self.latest_data["vega"] = greeks.get('vega')
+                    
+                iv_value = greeks.get('iv', 'N/A')
+                print(f"✅ Delta Exchange: Updated Greeks (IV={iv_value})")
+            else:
+                print(f"⚠️  Delta Exchange ticker failed: HTTP {response.status_code}")
             
             # Fetch options chain for additional metrics
             options_url = f"{self.base_url}/v2/products"
             params = {"contract_types": "call_options,put_options", "states": "live"}
             
-            options_response = requests.get(options_url, params=params, timeout=5)
+            # CRITICAL: Disable proxy for Delta Exchange
+            options_response = requests.get(options_url, params=params, timeout=10, proxies={"http": None, "https": None})
             if options_response.status_code == 200:
                 options_data = options_response.json()
                 products = options_data.get('result', [])
@@ -133,8 +142,20 @@ class DeltaExchangeCollector(ThreadedCollector):
                                 if max_iv > min_iv:
                                     iv_rank = ((current_iv - min_iv) / (max_iv - min_iv)) * 100
                                     self.latest_data["iv_rank"] = iv_rank
-        except Exception:
-            pass
+                                    
+                pcr_vol = self.latest_data.get('put_call_ratio_vol', 'N/A')
+                if pcr_vol != 'N/A' and pcr_vol is not None:
+                    print(f"✅ Delta Exchange: Updated options data (Put/Call Ratio Vol={pcr_vol:.2f})")
+                else:
+                    print(f"✅ Delta Exchange: Updated options data")
+            else:
+                print(f"⚠️  Delta Exchange options failed: HTTP {options_response.status_code}")
+        except requests.exceptions.Timeout:
+            print("❌ Delta Exchange: Request timeout (network issue)")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Delta Exchange: Network error - {e}")
+        except Exception as e:
+            print(f"❌ Delta Exchange: Unexpected error - {e}")
 
 
 class CryptoPanicCollector(ThreadedCollector):
@@ -195,8 +216,13 @@ class CryptoPanicCollector(ThreadedCollector):
                         if scores:
                             self.latest_data["news_sentiment"] = sum(scores) / len(scores)
                             self.latest_data["news_count"] = len(results)
-        except Exception:
-            pass
+                            print(f"✅ CryptoPanic: Updated sentiment={self.latest_data['news_sentiment']:.3f}, articles={len(results)}")
+            else:
+                print(f"⚠️  CryptoPanic: HTTP {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ CryptoPanic: Request failed - {e}")
+        except Exception as e:
+            print(f"❌ CryptoPanic: Error - {e}")
 
 
 class AlphaVantageCollector(ThreadedCollector):
@@ -250,8 +276,13 @@ class AlphaVantageCollector(ThreadedCollector):
                     with self.lock:
                         if scores:
                             self.latest_data["social_hype_index"] = sum(scores) / len(scores)
-        except Exception:
-            pass
+                            print(f"✅ AlphaVantage: Updated hype_index={self.latest_data['social_hype_index']:.3f}")
+            else:
+                print(f"⚠️  AlphaVantage: HTTP {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ AlphaVantage: Request failed - {e}")
+        except Exception as e:
+            print(f"❌ AlphaVantage: Error - {e}")
 
 
 class EtherscanCollector(ThreadedCollector):
@@ -328,8 +359,12 @@ class EtherscanCollector(ThreadedCollector):
             with self.lock:
                 self.latest_data["whale_inflow"] = inflow
                 self.latest_data["whale_outflow"] = outflow
-        except Exception:
-            pass
+                if inflow > 0 or outflow > 0:
+                    print(f"✅ Etherscan: Whale inflow={inflow:.2f} ETH, outflow={outflow:.2f} ETH")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Etherscan: Request failed - {e}")
+        except Exception as e:
+            print(f"❌ Etherscan: Error - {e}")
 
 
 class AlternativeMeCollector(ThreadedCollector):
@@ -352,9 +387,15 @@ class AlternativeMeCollector(ThreadedCollector):
                     data = response.json()
                     if data.get('data'):
                         with self.lock:
-                            self.latest_data["fear_greed_index"] = int(data['data'][0].get('value', 50))
-            except Exception:
-                pass
+                            old_value = self.latest_data["fear_greed_index"]
+                            new_value = int(data['data'][0].get('value', 50))
+                            self.latest_data["fear_greed_index"] = new_value
+                            if old_value != new_value:
+                                print(f"✅ Alternative.me: Fear & Greed Index updated to {new_value}")
+                else:
+                    print(f"⚠️  Alternative.me: HTTP {response.status_code}")
+            except Exception as e:
+                print(f"❌ Alternative.me: Error - {e}")
             time.sleep(1800)  # Every 30 minutes
 
 

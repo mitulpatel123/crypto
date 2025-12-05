@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Crypto Data Factory - Advanced Monitoring</title>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; }
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        
+        /* Header */
+        h1 { color: #58a6ff; margin-bottom: 10px; font-size: 2.2em; }
+        .header { background: linear-gradient(135deg, #1f2937 0%, #111827 100%); padding: 25px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .timestamp { color: #6e7681; font-size: 0.9em; }
+        
+        /* Navigation Tabs */
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab { background: #161b22; padding: 12px 24px; border-radius: 8px 8px 0 0; cursor: pointer; border: 1px solid #30363d; transition: all 0.2s; }
+        .tab:hover { background: #1c2128; }
+        .tab.active { background: #21262d; border-bottom: 3px solid #58a6ff; }
+        
+        /* Alert Banner */
+        .alert-banner { background: #da363320; border: 1px solid #da3633; border-radius: 8px; padding: 15px; margin-bottom: 20px; display: none; }
+        .alert-banner.show { display: block; }
+        .alert-item { padding: 10px; margin: 5px 0; background: #161b22; border-left: 4px solid #da3633; border-radius: 4px; }
+        
+        /* Cards */
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: #161b22; padding: 20px; border-radius: 8px; border-left: 4px solid; }
+        .stat-card.green { border-color: #2ea043; }
+        .stat-card.yellow { border-color: #d29922; }
+        .stat-card.red { border-color: #da3633; }
+        .stat-card.blue { border-color: #58a6ff; }
+        .stat-value { font-size: 2.5em; font-weight: bold; margin: 10px 0; }
+        .stat-label { color: #8b949e; font-size: 0.9em; }
+        
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; background: #161b22; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #21262d; }
+        th { background: #0d1117; color: #8b949e; font-weight: 600; }
+        tr:hover { background: #0d1117; }
+        
+        /* Status colors */
+        .status-ok, .status-success { color: #2ea043; }
+        .status-warning { color: #d29922; }
+        .status-critical, .status-error, .status-danger { color: #da3633; }
+        .status-unknown { color: #6e7681; }
+        
+        /* Progress bars */
+        .progress-bar { background: #21262d; height: 24px; border-radius: 4px; overflow: hidden; position: relative; }
+        .progress-fill { height: 100%; transition: width 0.3s ease; }
+        .progress-fill.green { background: linear-gradient(90deg, #2ea043, #3fb950); }
+        .progress-fill.yellow { background: linear-gradient(90deg, #d29922, #e3b341); }
+        .progress-fill.red { background: linear-gradient(90deg, #da3633, #f85149); }
+        .progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: 600; font-size: 0.85em; }
+        
+        /* Sections */
+        .section { background: #161b22; margin: 15px 0; padding: 20px; border-radius: 8px; border: 1px solid #30363d; }
+        .section h2 { color: #58a6ff; margin-bottom: 15px; font-size: 1.3em; }
+        
+        /* Badges */
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 0.85em; font-weight: 600; }
+        .badge.success { background: #2ea04320; color: #2ea043; }
+        .badge.warning { background: #d2992220; color: #d29922; }
+        .badge.danger { background: #da363320; color: #da3633; }
+        
+        /* Error log */
+        .error-log { max-height: 500px; overflow-y: auto; }
+        .error-entry { background: #1c2128; padding: 12px; margin: 8px 0; border-radius: 6px; border-left: 3px solid #da3633; }
+        .error-time { color: #6e7681; font-size: 0.85em; }
+        .error-type { color: #f85149; font-weight: 600; }
+        .error-message { color: #c9d1d9; margin-top: 5px; }
+        
+        /* Tab content */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        /* Metric inline */
+        .metric { display: inline-block; margin-right: 20px; }
+        
+        /* Auto-refresh indicator */
+        .refresh-indicator { position: fixed; top: 20px; right: 20px; background: #21262d; padding: 10px 15px; border-radius: 6px; font-size: 0.85em; }
+        .refresh-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #2ea043; margin-right: 8px; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    </style>
+</head>
+<body>
+    <div class="refresh-indicator">
+        <span class="refresh-dot"></span>
+        Auto-refresh: 10s
+    </div>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Crypto Data Factory - Advanced Monitoring</h1>
+            <p class="timestamp" id="last-updated">⏱ Loading...</p>
+        </div>
+        
+        <!-- Alert Banner -->
+        <div id="alert-banner" class="alert-banner">
+            <h3 style="color: #f85149; margin-bottom: 10px;">⚠️ Active Alerts</h3>
+            <div id="alert-list"></div>
+        </div>
+        
+        <!-- Navigation Tabs -->
+        <div class="tabs">
+            <div class="tab active" onclick="showTab('overview')">📊 Overview</div>
+            <div class="tab" onclick="showTab('api-monitoring')">🔌 API Monitoring</div>
+            <div class="tab" onclick="showTab('database')">💾 Database</div>
+            <div class="tab" onclick="showTab('errors')">🚨 Error Logs</div>
+        </div>
+        
+        <!-- Tab: Overview -->
+        <div id="tab-overview" class="tab-content active">
+            <div class="stats-grid" id="overview-stats"></div>
+            <div class="section" id="field-stats"></div>
+        </div>
+        
+        <!-- Tab: API Monitoring -->
+        <div id="tab-api-monitoring" class="tab-content">
+            <div id="api-metrics-container"></div>
+        </div>
+        
+        <!-- Tab: Database -->
+        <div id="tab-database" class="tab-content">
+            <div class="section">
+                <h2>💾 Database Write Operations</h2>
+                <div id="db-metrics"></div>
+            </div>
+            <div class="section">
+                <h2>📉 Field Write Statistics</h2>
+                <table id="field-write-table">
+                    <thead>
+                        <tr>
+                            <th>Field Name</th>
+                            <th>Success Count</th>
+                            <th>Failure Count</th>
+                            <th>Success Rate</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Tab: Error Logs -->
+        <div id="tab-errors" class="tab-content">
+            <div class="section">
+                <h2>🚨 Recent Error Logs</h2>
+                <div class="error-log" id="error-log"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let refreshInterval;
+        
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById('tab-' + tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        function formatNumber(num) {
+            return num.toLocaleString();
+        }
+        
+        function formatPercent(num) {
+            return num.toFixed(1) + '%';
+        }
+        
+        function updateDashboard() {
+            // Fetch monitoring data
+            fetch('/api/monitoring')
+                .then(r => r.json())
+                .then(data => {
+                    updateOverview(data);
+                    updateAPIMonitoring(data);
+                    updateDatabase(data);
+                    updateAlerts(data);
+                });
+            
+            // Fetch error logs
+            fetch('/api/errors')
+                .then(r => r.json())
+                .then(errors => {
+                    updateErrorLogs(errors);
+                });
+            
+            // Fetch basic status
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(status => {
+                    updateFieldStats(status);
+                });
+        }
+        
+        function updateOverview(data) {
+            document.getElementById('last-updated').textContent = '⏱ Last Updated: ' + new Date(data.timestamp).toLocaleString();
+            
+            const stats = document.getElementById('overview-stats');
+            const dbMetrics = data.db_metrics;
+            const apiCount = Object.keys(data.api_metrics).length;
+            const totalAPICalls = Object.values(data.api_metrics).reduce((sum, m) => sum + m.total_calls, 0);
+            const avgSuccessRate = Object.values(data.api_metrics).reduce((sum, m) => sum + m.success_rate, 0) / apiCount;
+            
+            stats.innerHTML = `
+                <div class="stat-card ${dbMetrics.success_rate >= 95 ? 'green' : dbMetrics.success_rate >= 80 ? 'yellow' : 'red'}">
+                    <div class="stat-label">DB WRITE SUCCESS</div>
+                    <div class="stat-value">${formatPercent(dbMetrics.success_rate)}</div>
+                    <div class="stat-label">${formatNumber(dbMetrics.successful_writes)} / ${formatNumber(dbMetrics.total_writes)}</div>
+                </div>
+                <div class="stat-card ${avgSuccessRate >= 95 ? 'green' : avgSuccessRate >= 80 ? 'yellow' : 'red'}">
+                    <div class="stat-label">API SUCCESS RATE</div>
+                    <div class="stat-value">${formatPercent(avgSuccessRate)}</div>
+                    <div class="stat-label">${apiCount} Active APIs</div>
+                </div>
+                <div class="stat-card blue">
+                    <div class="stat-label">TOTAL API CALLS</div>
+                    <div class="stat-value">${formatNumber(totalAPICalls)}</div>
+                    <div class="stat-label">All Time</div>
+                </div>
+                <div class="stat-card ${data.alerts.length > 0 ? 'red' : 'green'}">
+                    <div class="stat-label">ACTIVE ALERTS</div>
+                    <div class="stat-value">${data.alerts.length}</div>
+                    <div class="stat-label">Last 10 Minutes</div>
+                </div>
+            `;
+        }
+        
+        function updateAPIMonitoring(data) {
+            const container = document.getElementById('api-metrics-container');
+            let html = '';
+            
+            for (const [service, metrics] of Object.entries(data.api_metrics)) {
+                const color = metrics.success_rate >= 95 ? 'green' : metrics.success_rate >= 80 ? 'yellow' : 'red';
+                html += `
+                    <div class="section">
+                        <h2>🔌 ${service}</h2>
+                        <div class="metric"><strong>Total Calls:</strong> ${formatNumber(metrics.total_calls)}</div>
+                        <div class="metric"><strong>Success:</strong> <span class="status-ok">${formatNumber(metrics.success_count)}</span></div>
+                        <div class="metric"><strong>Errors:</strong> <span class="status-error">${formatNumber(metrics.error_count)}</span></div>
+                        <div class="metric"><strong>Avg Response:</strong> ${metrics.avg_response_time.toFixed(2)}s</div>
+                        
+                        <table style="margin-top: 15px;">
+                            <tr>
+                                <th>Metric</th>
+                                <th>Last 5 Minutes</th>
+                                <th>Status</th>
+                            </tr>
+                            <tr>
+                                <td>Recent Calls</td>
+                                <td>${metrics.recent_calls}</td>
+                                <td><span class="badge success">${metrics.recent_calls} calls</span></td>
+                            </tr>
+                            <tr>
+                                <td>Success Rate</td>
+                                <td>
+                                    <div class="progress-bar">
+                                        <div class="progress-fill ${color}" style="width: ${metrics.success_rate}%"></div>
+                                        <div class="progress-text">${formatPercent(metrics.success_rate)}</div>
+                                    </div>
+                                </td>
+                                <td><span class="badge ${color === 'green' ? 'success' : color === 'yellow' ? 'warning' : 'danger'}">${formatPercent(metrics.success_rate)}</span></td>
+                            </tr>
+                        </table>
+                        
+                        ${Object.keys(metrics.error_types).length > 0 ? `
+                            <h3 style="margin-top: 15px; color: #f85149;">Error Types</h3>
+                            <ul>
+                                ${Object.entries(metrics.error_types).map(([type, count]) => 
+                                    `<li><strong>${type}:</strong> ${count} occurrences</li>`
+                                ).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                `;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function updateDatabase(data) {
+            const dbMetrics = data.db_metrics;
+            const metricsDiv = document.getElementById('db-metrics');
+            
+            metricsDiv.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card blue">
+                        <div class="stat-label">Total Writes</div>
+                        <div class="stat-value">${formatNumber(dbMetrics.total_writes)}</div>
+                    </div>
+                    <div class="stat-card green">
+                        <div class="stat-label">Successful</div>
+                        <div class="stat-value">${formatNumber(dbMetrics.successful_writes)}</div>
+                    </div>
+                    <div class="stat-card red">
+                        <div class="stat-label">Failed</div>
+                        <div class="stat-value">${formatNumber(dbMetrics.failed_writes)}</div>
+                    </div>
+                    <div class="stat-card yellow">
+                        <div class="stat-label">Avg Write Time</div>
+                        <div class="stat-value">${dbMetrics.avg_write_time.toFixed(3)}s</div>
+                    </div>
+                </div>
+            `;
+            
+            // Field write statistics
+            const tbody = document.querySelector('#field-write-table tbody');
+            let tableHTML = '';
+            
+            const allFields = new Set([
+                ...Object.keys(dbMetrics.field_success || {}),
+                ...Object.keys(dbMetrics.field_failures || {})
+            ]);
+            
+            for (const field of allFields) {
+                const success = dbMetrics.field_success[field] || 0;
+                const failures = dbMetrics.field_failures[field] || 0;
+                const total = success + failures;
+                const rate = total > 0 ? (success / total * 100) : 0;
+                const status = rate >= 95 ? 'success' : rate >= 80 ? 'warning' : 'danger';
+                
+                tableHTML += `
+                    <tr>
+                        <td><strong>${field}</strong></td>
+                        <td>${formatNumber(success)}</td>
+                        <td>${formatNumber(failures)}</td>
+                        <td>
+                            <div class="progress-bar">
+                                <div class="progress-fill ${rate >= 95 ? 'green' : rate >= 80 ? 'yellow' : 'red'}" style="width: ${rate}%"></div>
+                                <div class="progress-text">${formatPercent(rate)}</div>
+                            </div>
+                        </td>
+                        <td><span class="badge ${status}">${formatPercent(rate)}</span></td>
+                    </tr>
+                `;
+            }
+            
+            tbody.innerHTML = tableHTML;
+        }
+        
+        function updateErrorLogs(errors) {
+            const errorLog = document.getElementById('error-log');
+            
+            if (errors.length === 0) {
+                errorLog.innerHTML = '<p style="color: #2ea043; text-align: center; padding: 20px;">✅ No errors in the last hour</p>';
+                return;
+            }
+            
+            const html = errors.map(error => `
+                <div class="error-entry">
+                    <div class="error-time">${new Date(error.timestamp).toLocaleString()}</div>
+                    <div class="error-type">${error.type || 'Unknown Error'} ${error.http_status ? '(HTTP ' + error.http_status + ')' : ''}</div>
+                    <div class="error-message">${error.message || 'No message'}</div>
+                </div>
+            `).join('');
+            
+            errorLog.innerHTML = html;
+        }
+        
+        function updateAlerts(data) {
+            const alertBanner = document.getElementById('alert-banner');
+            const alertList = document.getElementById('alert-list');
+            
+            if (data.alerts.length === 0) {
+                alertBanner.classList.remove('show');
+                return;
+            }
+            
+            alertBanner.classList.add('show');
+            
+            const html = data.alerts.map(alert => `
+                <div class="alert-item">
+                    <strong>[${alert.level}]</strong> ${alert.message}
+                    <br><span class="error-time">${new Date(alert.timestamp).toLocaleString()}</span>
+                </div>
+            `).join('');
+            
+            alertList.innerHTML = html;
+        }
+        
+        function updateFieldStats(status) {
+            const fieldStatsDiv = document.getElementById('field-stats');
+            
+            if (!status.field_stats || Object.keys(status.field_stats).length === 0) {
+                return;
+            }
+            
+            let html = '<h2>📊 Field Population Stats (Last 100 Rows)</h2><table><thead><tr><th>Field</th><th>Category</th><th>Population</th><th>Status</th></tr></thead><tbody>';
+            
+            for (const [field, data] of Object.entries(status.field_stats)) {
+                const color = data.percentage >= 90 ? 'green' : data.percentage >= 50 ? 'yellow' : 'red';
+                const badge = data.percentage >= 90 ? 'success' : data.percentage >= 50 ? 'warning' : 'danger';
+                
+                html += `
+                    <tr>
+                        <td><strong>${field}</strong></td>
+                        <td>${data.category}</td>
+                        <td>
+                            <div class="progress-bar">
+                                <div class="progress-fill ${color}" style="width: ${data.percentage}%"></div>
+                                <div class="progress-text">${formatPercent(data.percentage)}</div>
+                            </div>
+                        </td>
+                        <td><span class="badge ${badge}">${formatPercent(data.percentage)}</span></td>
+                    </tr>
+                `;
+            }
+            
+            html += '</tbody></table>';
+            fieldStatsDiv.innerHTML = html;
+        }
+        
+        // Initial load
+        updateDashboard();
+        
+        // Auto-refresh every 10 seconds
+        refreshInterval = setInterval(updateDashboard, 10000);
+    </script>
+</body>
+</html>

@@ -9,6 +9,8 @@ from psycopg2.extras import execute_values, RealDictCursor
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
+import numpy as np
+import time
 
 
 class TimescaleDB:
@@ -23,6 +25,13 @@ class TimescaleDB:
             "password": password,
             "dbname": dbname
         }
+        
+        # Import monitoring system
+        try:
+            from infrastructure.monitoring import MONITOR
+            self.monitor = MONITOR
+        except:
+            self.monitor = None
         
         # Connection Pool (Thread Safe)
         try:
@@ -115,8 +124,18 @@ class TimescaleDB:
                     gamma_strike_3 DOUBLE PRECISION,
                     theta DOUBLE PRECISION,
                     vega DOUBLE PRECISION,
+                    delta_bs DOUBLE PRECISION,
+                    gamma_bs DOUBLE PRECISION,
+                    vega_bs DOUBLE PRECISION,
+                    theta_bs DOUBLE PRECISION,
+                    oi_change_4h DOUBLE PRECISION,
+                    oi_change_24h DOUBLE PRECISION,
+                    liquidation_long_1h DOUBLE PRECISION,
+                    liquidation_short_1h DOUBLE PRECISION,
+                    liquidation_total_1h DOUBLE PRECISION,
+                    put_call_ratio DOUBLE PRECISION,
                     
-                    -- GROUP D: Sentiment & External (10 columns)
+                    -- GROUP D: Sentiment & External (13 columns)
                     whale_inflow DOUBLE PRECISION,
                     whale_outflow DOUBLE PRECISION,
                     news_sentiment DOUBLE PRECISION,
@@ -124,6 +143,9 @@ class TimescaleDB:
                     fear_greed_index DOUBLE PRECISION,
                     correlation_spx DOUBLE PRECISION,
                     correlation_dxy DOUBLE PRECISION,
+                    dxy_fred DOUBLE PRECISION,
+                    treasury_10y DOUBLE PRECISION,
+                    m2_money_supply DOUBLE PRECISION,
                     time_hour INT,
                     time_day INT,
                     is_weekend BOOLEAN,
@@ -192,6 +214,28 @@ class TimescaleDB:
         if not rows:
             return
         
+        start_time = time.time()
+        success = False
+        error_msg = None
+        failed_fields = []
+        
+        # Convert numpy types to Python types (FIX for "schema np does not exist" error)
+        def sanitize_value(value):
+            """Convert numpy types to Python native types"""
+            if isinstance(value, (np.integer, np.floating)):
+                return float(value)
+            elif isinstance(value, np.ndarray):
+                return value.tolist()
+            elif isinstance(value, np.bool_):
+                return bool(value)
+            return value
+        
+        # Sanitize all row data
+        sanitized_rows = []
+        for row in rows:
+            sanitized_row = {k: sanitize_value(v) for k, v in row.items()}
+            sanitized_rows.append(sanitized_row)
+        
         conn = self.get_conn()
         try:
             cur = conn.cursor()
@@ -210,6 +254,11 @@ class TimescaleDB:
                           'put_call_ratio_vol', 'put_call_ratio_oi',
                           'gamma_strike_1', 'gamma_strike_2', 'gamma_strike_3',
                           'theta', 'vega',
+                          'delta_bs', 'gamma_bs', 'vega_bs', 'theta_bs',
+                          'oi_change_4h', 'oi_change_24h',
+                          'liquidation_long_1h', 'liquidation_short_1h', 'liquidation_total_1h',
+                          'put_call_ratio',
+                          'dxy_fred', 'treasury_10y', 'm2_money_supply',
                           'whale_inflow', 'whale_outflow', 'news_sentiment',
                           'social_hype_index', 'fear_greed_index',
                           'correlation_spx', 'correlation_dxy',
@@ -217,7 +266,7 @@ class TimescaleDB:
             
             # Prepare values (fill missing columns with None)
             values = []
-            for row in rows:
+            for row in sanitized_rows:
                 row_values = [row.get(col) for col in all_columns]
                 values.append(row_values)
             
@@ -231,13 +280,26 @@ class TimescaleDB:
             
             execute_values(cur, query, values)
             conn.commit()
+            success = True
             
         except Exception as e:
+            error_msg = str(e)
             print(f"❌ Batch Insert Failed: {e}")
             conn.rollback()
         finally:
             cur.close()
             self.put_conn(conn)
+            
+            # Record in monitoring system
+            write_time = time.time() - start_time
+            if self.monitor:
+                self.monitor.db_monitor.record_write(
+                    success=success,
+                    row_data=sanitized_rows[0] if sanitized_rows else None,
+                    error=error_msg,
+                    write_time=write_time,
+                    failed_fields=failed_fields
+                )
     
     def insert_single(self, row: Dict[str, Any]):
         """Insert a single row"""

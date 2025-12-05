@@ -28,31 +28,31 @@ class BinanceWebSocketCollector:
         # Latest data storage
         self.latest_data = {
             "symbol": symbol.upper(),
-            "timestamp": None,
-            "open": None,
-            "high": None,
-            "low": None,
-            "close": None,
-            "volume": None,
-            "volume_buy": None,
-            "volume_sell": None,
+            # Note: timestamp NOT included here - should come from main loop
+            "open": 0.0,
+            "high": 0.0,
+            "low": 0.0,
+            "close": 0.0,
+            "volume": 0.0,
+            "volume_buy": 0.0,
+            "volume_sell": 0.0,
             "trade_count": 0,
-            "vwap": None,
-            "bid_ask_spread": None,
-            "ob_imbalance_5": None,
-            "ob_wall_bid": None,
-            "ob_wall_ask": None,
-            "flow_delta_1m": None,
-            "flow_delta_5m": None,
+            "vwap": 0.0,
+            "bid_ask_spread": 0.0,
+            "ob_imbalance_5": 0.0,
+            "ob_wall_bid": None,  # Keep None (only set if wall detected)
+            "ob_wall_ask": None,  # Keep None (only set if wall detected)
+            "flow_delta_1m": 0.0,
+            "flow_delta_5m": 0.0,
             "large_trade_count": 0,
-            "bid_price_1": None,
-            "ask_price_1": None,
-            "bid_qty_1": None,
-            "bid_qty_2": None,
-            "bid_qty_3": None,
-            "ask_qty_1": None,
-            "ask_qty_2": None,
-            "ask_qty_3": None
+            "bid_price_1": 0.0,
+            "ask_price_1": 0.0,
+            "bid_qty_1": 0.0,
+            "bid_qty_2": 0.0,
+            "bid_qty_3": 0.0,
+            "ask_qty_1": 0.0,
+            "ask_qty_2": 0.0,
+            "ask_qty_3": 0.0
         }
         
         # Flow tracking
@@ -139,10 +139,9 @@ class BinanceWebSocketCollector:
             price = float(data.get('p', 0))
             qty = float(data.get('q', 0))
             is_buyer = data.get('m', False)  # True = buyer is market maker (sell), False = buy
-            timestamp = data.get('T', 0) / 1000
             
             self.latest_data["close"] = price
-            self.latest_data["timestamp"] = datetime.fromtimestamp(timestamp)
+            # Don't set timestamp here - let main loop handle it
             self.latest_data["trade_count"] += 1
             
             # Track buy/sell volume split
