@@ -39,10 +39,15 @@ class DeltaExchangeCollector(ThreadedCollector):
         self.base_url = "https://api.delta.exchange"
         self.latest_data = {
             "implied_volatility": None,
+            "iv_rank": None,
             "delta_exposure": None,
+            "put_call_ratio_vol": None,
+            "put_call_ratio_oi": None,
+            "gamma_strike_1": None,
+            "gamma_strike_2": None,
+            "gamma_strike_3": None,
             "theta": None,
-            "vega": None,
-            "open_interest": None
+            "vega": None
         }
         print("✅ DeltaExchangeCollector (Threaded) initialized")
     
@@ -54,7 +59,7 @@ class DeltaExchangeCollector(ThreadedCollector):
             time.sleep(10)  # Fetch every 10 seconds
     
     def fetch_ticker(self, symbol: str = "BTCUSD"):
-        """Fetch ticker data with Greeks"""
+        """Fetch ticker data with Greeks and options metrics"""
         if not self.key_manager.increment("delta"):
             return
         
@@ -63,6 +68,7 @@ class DeltaExchangeCollector(ThreadedCollector):
             if not key:
                 return
             
+            # Fetch main ticker with Greeks
             url = f"{self.base_url}/v2/tickers/{symbol}"
             
             # Disable proxy for Delta Exchange (direct connection)
@@ -77,7 +83,56 @@ class DeltaExchangeCollector(ThreadedCollector):
                     self.latest_data["delta_exposure"] = greeks.get('delta')
                     self.latest_data["theta"] = greeks.get('theta')
                     self.latest_data["vega"] = greeks.get('vega')
-                    self.latest_data["open_interest"] = data.get('oi_value_usd')
+            
+            # Fetch options chain for additional metrics
+            options_url = f"{self.base_url}/v2/products"
+            params = {"contract_types": "call_options,put_options", "states": "live"}
+            
+            options_response = requests.get(options_url, params=params, timeout=5)
+            if options_response.status_code == 200:
+                options_data = options_response.json()
+                products = options_data.get('result', [])
+                
+                if products:
+                    # Calculate Put/Call ratios and gamma strikes
+                    calls = [p for p in products if p.get('contract_type') == 'call_options']
+                    puts = [p for p in products if p.get('contract_type') == 'put_options']
+                    
+                    # Put/Call ratio by volume
+                    call_vol = sum(float(c.get('volume', 0)) for c in calls)
+                    put_vol = sum(float(p.get('volume', 0)) for p in puts)
+                    if call_vol > 0:
+                        self.latest_data["put_call_ratio_vol"] = put_vol / call_vol
+                    
+                    # Put/Call ratio by open interest
+                    call_oi = sum(float(c.get('open_interest', 0)) for c in calls)
+                    put_oi = sum(float(p.get('open_interest', 0)) for p in puts)
+                    if call_oi > 0:
+                        self.latest_data["put_call_ratio_oi"] = put_oi / call_oi
+                    
+                    # Find top 3 gamma strikes (highest open interest strikes)
+                    all_options = calls + puts
+                    sorted_by_oi = sorted(all_options, key=lambda x: float(x.get('open_interest', 0)), reverse=True)
+                    
+                    with self.lock:
+                        if len(sorted_by_oi) > 0:
+                            self.latest_data["gamma_strike_1"] = float(sorted_by_oi[0].get('strike_price', 0))
+                        if len(sorted_by_oi) > 1:
+                            self.latest_data["gamma_strike_2"] = float(sorted_by_oi[1].get('strike_price', 0))
+                        if len(sorted_by_oi) > 2:
+                            self.latest_data["gamma_strike_3"] = float(sorted_by_oi[2].get('strike_price', 0))
+                        
+                        # Calculate IV rank (current IV percentile over 52 weeks)
+                        # Simplified: Use current IV position relative to min/max from active options
+                        ivs = [float(o.get('greeks', {}).get('iv', 0)) for o in all_options if o.get('greeks', {}).get('iv')]
+                        if ivs and len(ivs) > 10:
+                            current_iv = self.latest_data.get("implied_volatility")
+                            if current_iv:
+                                min_iv = min(ivs)
+                                max_iv = max(ivs)
+                                if max_iv > min_iv:
+                                    iv_rank = ((current_iv - min_iv) / (max_iv - min_iv)) * 100
+                                    self.latest_data["iv_rank"] = iv_rank
         except Exception:
             pass
 
@@ -210,11 +265,15 @@ class EtherscanCollector(ThreadedCollector):
         super().__init__()
         self.key_manager = key_manager
         self.base_url = "https://api.etherscan.io/api"
-        self.latest_data = {"whale_inflow": 0.0}
+        self.latest_data = {
+            "whale_inflow": 0.0,
+            "whale_outflow": 0.0
+        }
         self.wallets = [
-            "0x28c6c06298d514db089934071355e5743bf21d60",
-            "0x21a31ee1afc51d94c2efccaa2092ad1028285549"
+            "0x28c6c06298d514db089934071355e5743bf21d60",  # Binance 1
+            "0x21a31ee1afc51d94c2efccaa2092ad1028285549"   # Binance 2
         ]
+        self.previous_balances = {}  # Track previous balances
         print("✅ EtherscanCollector (Threaded) initialized")
     
     def run(self):
@@ -224,6 +283,7 @@ class EtherscanCollector(ThreadedCollector):
             time.sleep(60)  # Every 60 seconds
     
     def fetch_whale(self):
+        """Fetch whale wallet balances and calculate inflow/outflow"""
         if not self.key_manager.increment("etherscan"):
             return
         
@@ -232,7 +292,10 @@ class EtherscanCollector(ThreadedCollector):
             if not key:
                 return
             
-            total = 0
+            total_balance = 0
+            inflow = 0
+            outflow = 0
+            
             for wallet in self.wallets:
                 params = {
                     "module": "account",
@@ -246,11 +309,25 @@ class EtherscanCollector(ThreadedCollector):
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('status') == '1':
-                        total += int(data.get('result', 0)) / 1e18
+                        balance = int(data.get('result', 0)) / 1e18
+                        total_balance += balance
+                        
+                        # Calculate inflow/outflow
+                        if wallet in self.previous_balances:
+                            change = balance - self.previous_balances[wallet]
+                            if change > 0:
+                                inflow += change
+                            else:
+                                outflow += abs(change)
+                        
+                        # Update previous balance
+                        self.previous_balances[wallet] = balance
+                
                 time.sleep(0.4)  # Rate limit
             
             with self.lock:
-                self.latest_data["whale_inflow"] = total
+                self.latest_data["whale_inflow"] = inflow
+                self.latest_data["whale_outflow"] = outflow
         except Exception:
             pass
 

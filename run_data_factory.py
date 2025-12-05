@@ -127,6 +127,12 @@ def main():
                 "symbol": "BTCUSDT"
             }
             
+            # Add time-based features
+            now = datetime.now()
+            row["time_hour"] = now.hour
+            row["time_day"] = now.weekday()  # 0=Monday, 6=Sunday
+            row["is_weekend"] = now.weekday() >= 5  # Saturday=5, Sunday=6
+            
             # Get real-time data (non-blocking snapshots)
             row.update(binance_ws.get_snapshot())
             row.update(delta.get_snapshot())
