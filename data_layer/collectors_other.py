@@ -51,11 +51,14 @@ class DeltaExchangeCollector:
             
             data = response.json().get('result', {})
             
-            # Extract Greeks (if available)
-            self.latest_data["implied_volatility"] = data.get('greeks', {}).get('iv')
-            self.latest_data["delta_exposure"] = data.get('greeks', {}).get('delta')
-            self.latest_data["theta"] = data.get('greeks', {}).get('theta')
-            self.latest_data["vega"] = data.get('greeks', {}).get('vega')
+            # --- FIX: SAFE GREEKS EXTRACTION ---
+            # If greeks is None, convert to empty dict to prevent .get() errors
+            greeks = data.get('greeks') or {}
+            
+            self.latest_data["implied_volatility"] = greeks.get('iv')
+            self.latest_data["delta_exposure"] = greeks.get('delta')
+            self.latest_data["theta"] = greeks.get('theta')
+            self.latest_data["vega"] = greeks.get('vega')
             self.latest_data["open_interest"] = data.get('oi_value_usd')
             
             return True

@@ -102,8 +102,20 @@ class BinanceWebSocketCollector:
             on_open=on_open
         )
         
-        # Run forever (blocking call)
-        self.ws.run_forever()
+        # --- CRITICAL PROXY INJECTION ---
+        proxy_kwargs = {}
+        if self.proxy_manager:
+            proxy = self.proxy_manager.get_proxy()
+            if proxy:
+                print(f"🔒 Using Proxy: {proxy['host']}:{proxy['port']}")
+                proxy_kwargs = {
+                    "http_proxy_host": proxy['host'],
+                    "http_proxy_port": int(proxy['port']),
+                    "http_proxy_auth": (proxy['username'], proxy['password'])
+                }
+        
+        # Run forever (blocking call) with proxy support
+        self.ws.run_forever(**proxy_kwargs)
     
     def _handle_trade(self, data: Dict):
         """Handle aggregate trade data"""
