@@ -64,9 +64,9 @@ class DeltaExchangeCollector(ThreadedCollector):
                 return
             
             url = f"{self.base_url}/v2/tickers/{symbol}"
-            proxies = self.key_manager.get_proxy_dict()
             
-            response = requests.get(url, proxies=proxies, timeout=5)
+            # Disable proxy for Delta Exchange (direct connection)
+            response = requests.get(url, timeout=5)
             if response.status_code == 200:
                 json_resp = response.json()
                 data = json_resp.get('result') or {}
