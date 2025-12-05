@@ -111,7 +111,8 @@ class BinanceWebSocketCollector:
                 proxy_kwargs = {
                     "http_proxy_host": proxy['host'],
                     "http_proxy_port": int(proxy['port']),
-                    "http_proxy_auth": (proxy['username'], proxy['password'])
+                    "http_proxy_auth": (proxy['username'], proxy['password']),
+                    "proxy_type": "http"  # CRITICAL FIX: Explicit proxy type required
                 }
         
         # Run forever (blocking call) with proxy support

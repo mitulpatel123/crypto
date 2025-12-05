@@ -49,11 +49,13 @@ class DeltaExchangeCollector:
             response = requests.get(url, proxies=proxies, timeout=10)
             response.raise_for_status()
             
-            data = response.json().get('result', {})
+            # SAFE DATA EXTRACTION: Handle null responses from Delta API
+            json_resp = response.json()
+            data = json_resp.get('result') or {}  # Handle null result
             
             # --- FIX: SAFE GREEKS EXTRACTION ---
             # If greeks is None, convert to empty dict to prevent .get() errors
-            greeks = data.get('greeks') or {}
+            greeks = data.get('greeks') or {}  # Handle null greeks
             
             self.latest_data["implied_volatility"] = greeks.get('iv')
             self.latest_data["delta_exposure"] = greeks.get('delta')
