@@ -65,7 +65,7 @@ def main():
     binance_ws = BinanceWebSocketCollector(symbol="btcusdt", proxy_manager=key_manager)
     binance_rest = BinanceRESTCollector(symbol="BTCUSDT", key_manager=key_manager)
     
-    # Other collectors
+    # Threaded collectors (will run in background)
     delta = DeltaExchangeCollector(key_manager)
     cryptopanic = CryptoPanicCollector(key_manager)
     alphavantage = AlphaVantageCollector(key_manager)
@@ -74,28 +74,26 @@ def main():
     
     # Collector status tracking
     collectors_status = {
-        "Binance WebSocket": "starting",
-        "Binance REST": "ok",
-        "Delta Exchange": "ok",
-        "CryptoPanic": "ok",
-        "Alpha Vantage": "ok",
-        "Etherscan": "ok",
-        "Alternative.me": "ok"
+        "Binance WS": "starting",
+        "Delta": "running",
+        "News": "running",
+        "Sentiment": "running"
     }
     
-    # Step 5: Start Binance WebSocket in separate thread
-    print("\n🔌 Step 5: Starting WebSocket Collectors...")
-    def run_binance_ws():
-        try:
-            collectors_status["Binance WebSocket"] = "running"
-            binance_ws.run()  # Blocking call
-        except Exception as e:
-            print(f"❌ Binance WebSocket error: {e}")
-            collectors_status["Binance WebSocket"] = "error"
+    # Step 5: Start ALL background threads
+    print("\n🔌 Step 5: Starting All Collectors...")
     
-    ws_thread = threading.Thread(target=run_binance_ws, daemon=True)
-    ws_thread.start()
-    time.sleep(3)  # Wait for WebSocket to connect
+    # Start Binance WebSocket
+    threading.Thread(target=binance_ws.run, daemon=True).start()
+    
+    # Start threaded collectors
+    delta.start()
+    cryptopanic.start()
+    alphavantage.start()
+    etherscan.start()
+    alternative_me.start()
+    
+    time.sleep(3)  # Wait for connections
     
     # Step 6: Start Web UI in separate thread
     print("\n🌐 Step 6: Starting Web UI...")
@@ -118,80 +116,41 @@ def main():
     
     # Main data collection loop
     iteration = 0
-    last_delta_fetch = 0
-    last_cryptopanic_fetch = 0
-    last_alphavantage_fetch = 0
-    last_etherscan_fetch = 0
-    last_fear_greed_fetch = 0
     
     while not shutdown_event.is_set():
         try:
             iteration += 1
-            current_time = time.time()
             
-            # Aggregate data from all collectors
+            # Aggregate data from all collectors (INSTANT - just reading cached data)
             row = {
                 "timestamp": datetime.now(),
                 "symbol": "BTCUSDT"
             }
             
-            # Get Binance WebSocket data (real-time)
-            ws_data = binance_ws.get_snapshot()
-            row.update(ws_data)
+            # Get real-time data (non-blocking snapshots)
+            row.update(binance_ws.get_snapshot())
+            row.update(delta.get_snapshot())
+            row.update(cryptopanic.get_snapshot())
+            row.update(alphavantage.get_snapshot())
+            row.update(etherscan.get_snapshot())
+            row.update(alternative_me.get_snapshot())
             
             # Get Binance REST data (every 60 seconds)
             if iteration % 60 == 0:
                 binance_rest.fetch_funding_rate()
                 binance_rest.fetch_open_interest()
                 binance_rest.fetch_long_short_ratio()
-                rest_data = binance_rest.get_snapshot()
-                row.update(rest_data)
-            
-            # Delta Exchange (every 10 seconds)
-            if current_time - last_delta_fetch >= 10:
-                if delta.fetch_ticker():
-                    row.update(delta.get_snapshot())
-                    last_delta_fetch = current_time
-            
-            # CryptoPanic (every 5 minutes = 300 seconds)
-            # With 4 keys × 100 req/month = 400 req/month = ~13 req/day
-            # Every 5 min = 288 req/day, so we need to be careful!
-            if current_time - last_cryptopanic_fetch >= 600:  # Every 10 minutes instead
-                if cryptopanic.fetch_news():
-                    row.update(cryptopanic.get_snapshot())
-                    last_cryptopanic_fetch = current_time
-            
-            # Alpha Vantage (every 30 minutes)
-            # With 30 keys × 25 req/day = 750 req/day
-            # Every 30 min = 48 req/day (well within limits!)
-            if current_time - last_alphavantage_fetch >= 1800:
-                if alphavantage.fetch_crypto_sentiment():
-                    row.update(alphavantage.get_snapshot())
-                    last_alphavantage_fetch = current_time
-            
-            # Etherscan (every 60 seconds)
-            if current_time - last_etherscan_fetch >= 60:
-                if etherscan.fetch_whale_movements():
-                    row.update(etherscan.get_snapshot())
-                    last_etherscan_fetch = current_time
-            
-            # Fear & Greed (every 30 minutes, data updates every 8 hours anyway)
-            if current_time - last_fear_greed_fetch >= 1800:
-                if alternative_me.fetch_fear_greed():
-                    row.update(alternative_me.get_snapshot())
-                    last_fear_greed_fetch = current_time
+                row.update(binance_rest.get_snapshot())
             
             # Insert into database
             if row.get("timestamp"):
                 db.insert_single(row)
                 
                 if iteration % 10 == 0:  # Print every 10 seconds
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-                          f"💾 Row {iteration} saved | "
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] "
+                          f"💾 Row {iteration} | "
                           f"Price: ${row.get('close', 0):.2f} | "
-                          f"Funding: {row.get('funding_rate', 0):.6f} | "
-                          f"OI: ${row.get('open_interest', 0):,.0f} | "
-                          f"Fear/Greed: {row.get('fear_greed_index', 50)}")
+                          f"OI: ${row.get('open_interest', 0):,.0f}")
             
             # Update web UI status (every 5 seconds)
             if iteration % 5 == 0:

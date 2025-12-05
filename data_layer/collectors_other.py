@@ -1,21 +1,40 @@
 """
-Other Data Collectors: Delta Exchange, CryptoPanic, Alpha Vantage, Etherscan, etc.
-Uses latest 2025 API endpoints
+Other Data Collectors - THREADED VERSION
+Uses latest 2025 API endpoints with background threading
 """
 
 import requests
 import time
+import threading
 from typing import Dict, Any, Optional
 from datetime import datetime
 
 
-class DeltaExchangeCollector:
+class ThreadedCollector(threading.Thread):
+    """Base class for threaded collectors"""
+    def __init__(self):
+        super().__init__()
+        self.daemon = True
+        self.running = False
+        self.lock = threading.Lock()
+        self.latest_data = {}
+    
+    def get_snapshot(self) -> Dict[str, Any]:
+        with self.lock:
+            return self.latest_data.copy()
+    
+    def stop(self):
+        self.running = False
+
+
+class DeltaExchangeCollector(ThreadedCollector):
     """
     Delta Exchange India API Collector
     https://www.delta.exchange/api (2025)
     """
     
     def __init__(self, key_manager):
+        super().__init__()
         self.key_manager = key_manager
         self.base_url = "https://api.delta.exchange"
         self.latest_data = {
@@ -25,55 +44,45 @@ class DeltaExchangeCollector:
             "vega": None,
             "open_interest": None
         }
-        print("✅ DeltaExchangeCollector initialized")
+        print("✅ DeltaExchangeCollector (Threaded) initialized")
     
-    def fetch_ticker(self, symbol: str = "BTCUSD") -> bool:
+    def run(self):
+        """Background thread loop"""
+        self.running = True
+        while self.running:
+            self.fetch_ticker()
+            time.sleep(10)  # Fetch every 10 seconds
+    
+    def fetch_ticker(self, symbol: str = "BTCUSD"):
         """Fetch ticker data with Greeks"""
-        # Track usage internally to respect our rate limits
         if not self.key_manager.increment("delta"):
-            print("⚠️  Delta Exchange rate limit reached")
-            return False
+            return
         
         try:
-            # Verify we have a key configured (even though public endpoint doesn't need auth)
             key = self.key_manager.get_key("delta")
             if not key:
-                return False
+                return
             
-            # ✅ SECURITY FIX: /v2/tickers is a PUBLIC endpoint
-            # No authentication headers required!
-            # If you need private data later, implement proper HMAC-SHA256 signature
             url = f"{self.base_url}/v2/tickers/{symbol}"
-            
             proxies = self.key_manager.get_proxy_dict()
-            response = requests.get(url, proxies=proxies, timeout=10)
-            response.raise_for_status()
             
-            # SAFE DATA EXTRACTION: Handle null responses from Delta API
-            json_resp = response.json()
-            data = json_resp.get('result') or {}  # Handle null result
-            
-            # --- FIX: SAFE GREEKS EXTRACTION ---
-            # If greeks is None, convert to empty dict to prevent .get() errors
-            greeks = data.get('greeks') or {}  # Handle null greeks
-            
-            self.latest_data["implied_volatility"] = greeks.get('iv')
-            self.latest_data["delta_exposure"] = greeks.get('delta')
-            self.latest_data["theta"] = greeks.get('theta')
-            self.latest_data["vega"] = greeks.get('vega')
-            self.latest_data["open_interest"] = data.get('oi_value_usd')
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️  Delta Exchange error: {e}")
-            return False
-    
-    def get_snapshot(self) -> Dict[str, Any]:
-        return self.latest_data.copy()
+            response = requests.get(url, proxies=proxies, timeout=5)
+            if response.status_code == 200:
+                json_resp = response.json()
+                data = json_resp.get('result') or {}
+                greeks = data.get('greeks') or {}
+                
+                with self.lock:
+                    self.latest_data["implied_volatility"] = greeks.get('iv')
+                    self.latest_data["delta_exposure"] = greeks.get('delta')
+                    self.latest_data["theta"] = greeks.get('theta')
+                    self.latest_data["vega"] = greeks.get('vega')
+                    self.latest_data["open_interest"] = data.get('oi_value_usd')
+        except Exception:
+            pass
 
 
-class CryptoPanicCollector:
+class CryptoPanicCollector(ThreadedCollector):
     """
     CryptoPanic API (Developer v2 - 2025)
     https://cryptopanic.com/developers/api/
@@ -81,24 +90,29 @@ class CryptoPanicCollector:
     """
     
     def __init__(self, key_manager):
+        super().__init__()
         self.key_manager = key_manager
         self.base_url = "https://cryptopanic.com/api/developer/v2"
         self.latest_data = {
-            "news_sentiment": 0.0,  # -1 to +1
+            "news_sentiment": 0.0,
             "news_count": 0
         }
-        print("✅ CryptoPanicCollector initialized")
+        print("✅ CryptoPanicCollector (Threaded) initialized")
     
-    def fetch_news(self, currencies: str = "BTC") -> bool:
-        """Fetch latest news and calculate sentiment"""
+    def run(self):
+        self.running = True
+        while self.running:
+            self.fetch_news()
+            time.sleep(600)  # Every 10 minutes
+    
+    def fetch_news(self, currencies: str = "BTC"):
         if not self.key_manager.increment("cryptopanic"):
-            print("⚠️  CryptoPanic monthly limit reached")
-            return False
+            return
         
         try:
             key = self.key_manager.get_key("cryptopanic")
             if not key:
-                return False
+                return
             
             url = f"{self.base_url}/posts/"
             params = {
@@ -109,38 +123,28 @@ class CryptoPanicCollector:
             }
             
             response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            results = data.get('results', [])
-            
-            if results:
-                # Calculate sentiment from votes
-                sentiment_scores = []
-                for item in results[:20]:  # Latest 20 news
-                    votes = item.get('votes', {})
-                    positive = votes.get('positive', 0)
-                    negative = votes.get('negative', 0)
-                    
-                    if positive + negative > 0:
-                        score = (positive - negative) / (positive + negative)
-                        sentiment_scores.append(score)
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('results', [])
                 
-                if sentiment_scores:
-                    self.latest_data["news_sentiment"] = sum(sentiment_scores) / len(sentiment_scores)
-                    self.latest_data["news_count"] = len(results)
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️  CryptoPanic error: {e}")
-            return False
-    
-    def get_snapshot(self) -> Dict[str, Any]:
-        return self.latest_data.copy()
+                if results:
+                    scores = []
+                    for item in results[:20]:
+                        votes = item.get('votes', {})
+                        pos = votes.get('positive', 0)
+                        neg = votes.get('negative', 0)
+                        if pos + neg > 0:
+                            scores.append((pos - neg) / (pos + neg))
+                    
+                    with self.lock:
+                        if scores:
+                            self.latest_data["news_sentiment"] = sum(scores) / len(scores)
+                            self.latest_data["news_count"] = len(results)
+        except Exception:
+            pass
 
 
-class AlphaVantageCollector:
+class AlphaVantageCollector(ThreadedCollector):
     """
     Alpha Vantage API (2025)
     https://www.alphavantage.co/documentation/
@@ -148,23 +152,26 @@ class AlphaVantageCollector:
     """
     
     def __init__(self, key_manager):
+        super().__init__()
         self.key_manager = key_manager
         self.base_url = "https://www.alphavantage.co/query"
-        self.latest_data = {
-            "social_hype_index": 0.0
-        }
-        print("✅ AlphaVantageCollector initialized with 30 keys")
+        self.latest_data = {"social_hype_index": 0.0}
+        print("✅ AlphaVantageCollector (Threaded) initialized")
     
-    def fetch_crypto_sentiment(self, symbol: str = "BTC") -> bool:
-        """Fetch cryptocurrency news sentiment"""
+    def run(self):
+        self.running = True
+        while self.running:
+            self.fetch_sentiment()
+            time.sleep(1800)  # Every 30 minutes
+    
+    def fetch_sentiment(self, symbol: str = "BTC"):
         if not self.key_manager.increment("alphavantage"):
-            print("⚠️  Alpha Vantage daily limit reached (rotating to next key)")
-            return False
+            return
         
         try:
             key = self.key_manager.get_key("alphavantage")
             if not key:
-                return False
+                return
             
             params = {
                 "function": "NEWS_SENTIMENT",
@@ -174,35 +181,25 @@ class AlphaVantageCollector:
             }
             
             response = requests.get(self.base_url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            feed = data.get('feed', [])
-            
-            if feed:
-                # Calculate average sentiment
-                sentiments = []
-                for article in feed:
-                    ticker_sentiment = article.get('ticker_sentiment', [])
-                    for ts in ticker_sentiment:
-                        if ts.get('ticker') == f"CRYPTO:{symbol}":
-                            score = float(ts.get('ticker_sentiment_score', 0))
-                            sentiments.append(score)
+            if response.status_code == 200:
+                data = response.json()
+                feed = data.get('feed', [])
                 
-                if sentiments:
-                    self.latest_data["social_hype_index"] = sum(sentiments) / len(sentiments)
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️  Alpha Vantage error: {e}")
-            return False
-    
-    def get_snapshot(self) -> Dict[str, Any]:
-        return self.latest_data.copy()
+                if feed:
+                    scores = []
+                    for article in feed:
+                        for ts in article.get('ticker_sentiment', []):
+                            if ts.get('ticker') == f"CRYPTO:{symbol}":
+                                scores.append(float(ts.get('ticker_sentiment_score', 0)))
+                    
+                    with self.lock:
+                        if scores:
+                            self.latest_data["social_hype_index"] = sum(scores) / len(scores)
+        except Exception:
+            pass
 
 
-class EtherscanCollector:
+class EtherscanCollector(ThreadedCollector):
     """
     Etherscan API (2025)
     https://docs.etherscan.io/api-endpoints
@@ -210,39 +207,33 @@ class EtherscanCollector:
     """
     
     def __init__(self, key_manager):
+        super().__init__()
         self.key_manager = key_manager
         self.base_url = "https://api.etherscan.io/api"
-        self.latest_data = {
-            "whale_inflow": 0.0,
-            "whale_outflow": 0.0
-        }
-        
-        # Major exchange wallets to track
-        self.exchange_wallets = [
-            "0x28c6c06298d514db089934071355e5743bf21d60",  # Binance 1
-            "0x21a31ee1afc51d94c2efccaa2092ad1028285549",  # Binance 2
-            "0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be",  # Binance 3
-            "0x564286362092d8e7936f0549571a803b203aaced",  # Binance 4
-            "0x0681d8db095565fe8a346fa0277bffde9c0edbbf",  # Binance 5
+        self.latest_data = {"whale_inflow": 0.0}
+        self.wallets = [
+            "0x28c6c06298d514db089934071355e5743bf21d60",
+            "0x21a31ee1afc51d94c2efccaa2092ad1028285549"
         ]
-        
-        print("✅ EtherscanCollector initialized")
+        print("✅ EtherscanCollector (Threaded) initialized")
     
-    def fetch_whale_movements(self) -> bool:
-        """Track ETH movements to/from exchanges"""
+    def run(self):
+        self.running = True
+        while self.running:
+            self.fetch_whale()
+            time.sleep(60)  # Every 60 seconds
+    
+    def fetch_whale(self):
         if not self.key_manager.increment("etherscan"):
-            return False
+            return
         
         try:
             key = self.key_manager.get_key("etherscan")
             if not key:
-                return False
+                return
             
-            # Sample: Check balance changes (simplified)
-            # In production, you'd track transactions
-            
-            total_balance = 0
-            for wallet in self.exchange_wallets[:2]:  # Check first 2 to save API calls
+            total = 0
+            for wallet in self.wallets:
                 params = {
                     "module": "account",
                     "action": "balance",
@@ -252,61 +243,42 @@ class EtherscanCollector:
                 }
                 
                 response = requests.get(self.base_url, params=params, timeout=10)
-                response.raise_for_status()
-                
-                data = response.json()
-                if data.get('status') == '1':
-                    balance_wei = int(data.get('result', 0))
-                    balance_eth = balance_wei / 1e18
-                    total_balance += balance_eth
-                
-                time.sleep(0.4)  # Rate limit: 3 calls/sec
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('status') == '1':
+                        total += int(data.get('result', 0)) / 1e18
+                time.sleep(0.4)  # Rate limit
             
-            # Store as whale inflow (simplified logic)
-            self.latest_data["whale_inflow"] = total_balance
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️  Etherscan error: {e}")
-            return False
-    
-    def get_snapshot(self) -> Dict[str, Any]:
-        return self.latest_data.copy()
+            with self.lock:
+                self.latest_data["whale_inflow"] = total
+        except Exception:
+            pass
 
 
-class AlternativeMeCollector:
+class AlternativeMeCollector(ThreadedCollector):
     """
     Alternative.me Fear & Greed Index (Free, no API key)
     https://api.alternative.me/fng/
     """
     
     def __init__(self):
-        self.base_url = "https://api.alternative.me"
-        self.latest_data = {
-            "fear_greed_index": 50  # Default neutral
-        }
-        print("✅ AlternativeMeCollector initialized")
+        super().__init__()
+        self.latest_data = {"fear_greed_index": 50}
+        print("✅ AlternativeMeCollector (Threaded) initialized")
     
-    def fetch_fear_greed(self) -> bool:
-        """Fetch Fear & Greed Index"""
-        try:
-            url = f"{self.base_url}/fng/"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            if 'data' in data and len(data['data']) > 0:
-                value = int(data['data'][0].get('value', 50))
-                self.latest_data["fear_greed_index"] = value
-                return True
-                
-        except Exception as e:
-            print(f"⚠️  Alternative.me error: {e}")
-        return False
-    
-    def get_snapshot(self) -> Dict[str, Any]:
-        return self.latest_data.copy()
+    def run(self):
+        self.running = True
+        while self.running:
+            try:
+                response = requests.get("https://api.alternative.me/fng/", timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('data'):
+                        with self.lock:
+                            self.latest_data["fear_greed_index"] = int(data['data'][0].get('value', 50))
+            except Exception:
+                pass
+            time.sleep(1800)  # Every 30 minutes
 
 
 class BlockchainInfoCollector:

@@ -248,7 +248,7 @@ class KeyManager:
                     "total_keys": len(keys),
                     "current_key_index": self.usage[service]["index"],
                     "total_requests": self.usage[service]["count"],
-                    "keys": []
+                    "key_list": []  # RENAMED: was 'keys', conflicts with dict.keys()
                 }
                 
                 for i, key in enumerate(keys):
@@ -256,7 +256,7 @@ class KeyManager:
                     limit = self._get_limit(service, key)
                     used = self.key_usage[key_id]["count"]
                     
-                    service_status["keys"].append({
+                    service_status["key_list"].append({
                         "index": i,
                         "active": i == self.usage[service]["index"],
                         "used": used,

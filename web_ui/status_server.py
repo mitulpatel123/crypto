@@ -69,7 +69,7 @@ HTML_TEMPLATE = """
                 <th>Usage</th>
                 <th>Progress</th>
             </tr>
-            {% for key in service_data.keys %}
+            {% for key in service_data.key_list %}
             <tr>
                 <td>{{ key.index + 1 }} {% if key.active %}⭐{% endif %}</td>
                 <td class="status-{{ key.status.lower() }}">{{ key.status }}</td>
