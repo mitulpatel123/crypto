@@ -59,7 +59,7 @@ class CoinalyzeCollector(threading.Thread):
                 "symbols": "BTCUSDT",  # Use simple symbol format per API docs
                 "from": start_time,
                 "to": end_time,
-                "interval": "1h"  # Add interval parameter
+                "interval": "1hour"  # API requires '1hour' not '1h'
             }
             headers = {"api_key": api_key}
             
@@ -123,7 +123,7 @@ class CoinalyzeCollector(threading.Thread):
                 "symbols": "BTCUSDT.6",
                 "from": int((datetime.now() - timedelta(hours=24)).timestamp()),
                 "to": int(datetime.now().timestamp()),
-                "interval": "1h"
+                "interval": "1hour"  # API requires '1hour' not '1h'
             }
             headers = {"api_key": api_key}
             
