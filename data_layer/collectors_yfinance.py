@@ -5,11 +5,14 @@ Provides SPX and DXY correlations with BTC
 
 import threading
 import time
+import logging
 from typing import Dict, Any
 
 try:
     import yfinance as yf
     import pandas as pd
+    # Suppress yfinance warnings
+    logging.getLogger('yfinance').setLevel(logging.CRITICAL)
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
@@ -69,8 +72,7 @@ class YahooFinanceCollector(threading.Thread):
                 tickers=tickers_list,
                 period="1d",
                 interval="1m",
-                progress=False,
-                show_errors=False
+                progress=False
             )
             
             if data.empty:

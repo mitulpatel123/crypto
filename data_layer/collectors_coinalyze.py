@@ -46,7 +46,7 @@ class CoinalyzeCollector(threading.Thread):
         return self.api_keys[self.current_key_index]
     
     def fetch_liquidations(self):
-        """Fetch liquidation history (last 1 hour)"""
+        """Fetch liquidation data from Coinalyze API"""
         try:
             api_key = self.get_current_api_key()
             
@@ -56,9 +56,10 @@ class CoinalyzeCollector(threading.Thread):
             
             url = f"{self.base_url}/liquidation-history"
             params = {
-                "symbols": "BTCUSDT.6",  # Binance perpetual
+                "symbols": "BTCUSDT",  # Use simple symbol format per API docs
                 "from": start_time,
-                "to": end_time
+                "to": end_time,
+                "interval": "1h"  # Add interval parameter
             }
             headers = {"api_key": api_key}
             
@@ -68,17 +69,26 @@ class CoinalyzeCollector(threading.Thread):
             if response.status_code == 200:
                 data = response.json()
                 
+                # Check if data is a list or dict
+                if isinstance(data, dict) and 'data' in data:
+                    events = data['data']
+                elif isinstance(data, list):
+                    events = data
+                else:
+                    print(f"⚠️  Coinalyze: Unexpected data format")
+                    return False
+                
                 # Aggregate liquidations by side
                 long_liq = 0
                 short_liq = 0
                 
-                for event in data:
+                for event in events:
                     side = event.get("side", "").lower()
-                    quantity_usd = float(event.get("value", 0))
+                    quantity_usd = float(event.get("value", 0) or event.get("amount", 0) or 0)
                     
-                    if side == "buy":  # Buy liquidation = long position liquidated
+                    if side == "buy" or side == "long":  # Long liquidation
                         long_liq += quantity_usd
-                    elif side == "sell":  # Sell liquidation = short position liquidated
+                    elif side == "sell" or side == "short":  # Short liquidation
                         short_liq += quantity_usd
                 
                 with self.lock:
@@ -90,6 +100,8 @@ class CoinalyzeCollector(threading.Thread):
                 return True
             else:
                 print(f"⚠️  Coinalyze Liq: HTTP {response.status_code}")
+                if response.status_code == 400:
+                    print(f"    Response: {response.text[:200]}")
                 if response.status_code == 429:
                     print(f"    Rate limit hit, rotating to next key...")
                     self.call_count = self.max_calls_per_key  # Force rotation

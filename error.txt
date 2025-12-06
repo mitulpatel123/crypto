@@ -1,0 +1,39 @@
+The Coinalyze API provides access to liquidation data through the get/liquidation-history endpoint, which retrieves historical liquidation data for specified futures markets.
+ This endpoint requires the symbols parameter, which is a comma-separated list of market symbols (e.g., BTCUSDT_PERP.A), and supports a maximum of 20 symbols per request.
+ Additional query parameters include interval (e.g., "1min", "1hour", "daily"), from, and to, which define the time range in UNIX timestamps.
+ The convert_to_usd parameter can be set to "true" to convert values to USD.
+
+The API returns data in JSON format, with each symbol having a history array containing objects with t (timestamp), o (open), h (high), l (low), and c (close) values representing the liquidation data.
+ The data is returned in ascending order, and historical data is retained for up to 1500–2000 data points for intraday intervals, with older data being deleted daily.
+ For daily intervals, data is not deleted.
+
+Coinalyze aggregates liquidation data by combining coin-margined and stablecoin-margined contract liquidations, converting them to USD for consistency.
+ The platform supports multiple exchanges, including Binance, Bybit, OKX, and Kraken, with specific contracts like API3USDT, API3-USDT-SWAP, and pf_api3usd being included in the data.
+ As of February 2025, ByBit resumed providing full liquidation data after a period of limited reporting.
+
+Authentication is handled via an API key provided in the header or as a query parameter.
+ The rate limit is 40 API calls per minute per key, and exceeding this limit results in a 429 HTTP response with a Retry-After header indicating the wait time.
+ The API is free to use, and users are encouraged to cite the data source when used publicly.
+
+
+
+ replace this CoinGlass: HTTP 404 (premium tier required)
+ with any other api if provide and let me know i can provide that api for this so re search about this api and what we need based on that all endpoints serach and also give me the name so i can prvide that api in bulk 
+
+
+ Current M2 Data Series (as of November 25, 2025)
+FRED maintains several M2-related series:
+
+M2SL: Seasonally Adjusted Monthly M2 Money Stock
+Preferred replacement for the discontinued weekly seasonally adjusted series.
+Latest value (Oct 2025): ~$22,221.9 billion
+URL: https://fred.stlouisfed.org/series/M2SL
+M2NS: Not Seasonally Adjusted Monthly M2 Money Stock
+Monthly data, not adjusted for seasonal variations.
+URL: https://fred.stlouisfed.org/series/M2NS
+WM2NS: Not Seasonally Adjusted Weekly M2 Money Stock
+Weekly frequency data.
+Latest value (Nov 3, 2025): $22,303.8 billion
+URL: https://fred.stlouisfed.org/series/WM2NS
+⚠️ The original M2 (DISCONTINUED) series (weekly, seasonally adjusted) is no longer updated after February 2021. Using it may result in NaN or missing values.
+
